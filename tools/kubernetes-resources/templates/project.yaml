@@ -1,0 +1,25 @@
+{{- if .Values.sourceRepos }}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.projectName | default .Values.name | quote }}
+  namespace: {{ .Values.projectNamespace | default "argocd-system" | quote }}
+spec:
+  description: {{ .Values.description | default "" | quote }}
+{{- with .Values.sourceNamespaces }}
+  sourceNamespaces:
+{{ toYaml . | indent 4 }}
+{{- end }}
+  sourceRepos:
+{{ toYaml .Values.sourceRepos | indent 4 }}
+  destinations:
+{{ toYaml .Values.destinations | indent 4 }}
+  clusterResourceWhitelist:
+{{ toYaml (.Values.clusterResourceWhitelist | default (list)) | indent 4 }}
+  clusterResourceBlacklist:
+{{ toYaml (.Values.clusterResourceBlacklist | default (list)) | indent 4 }}
+  namespaceResourceWhitelist:
+{{ toYaml (.Values.namespaceResourceWhitelist | default (list)) | indent 4 }}
+  namespaceResourceBlacklist:
+{{ toYaml (.Values.namespaceResourceBlacklist | default (list)) | indent 4 }}
+{{- end }}

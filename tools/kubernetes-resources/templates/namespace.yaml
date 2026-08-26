@@ -1,0 +1,60 @@
+{{- with .Values.namespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .name | quote }}
+  {{- with .labels }}
+  labels:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  {{- with .annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+
+{{- with .quota }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ printf "%s-quota" $.Values.namespace.name | quote }}
+  namespace: {{ $.Values.namespace.name | quote }}
+spec:
+  hard:
+      requests.cpu: {{ .cpu | default "1" | quote }}
+      requests.memory: {{ .memory | default "1Gi" | quote }}
+      requests.storage: {{ .storage | default "10Gi" | quote }}
+      limits.cpu: {{ .cpu | default "1" | quote }}
+      limits.memory: {{ .memory | default "1Gi" | quote }}
+      pods: {{ .pods | default "10" | quote }}
+      services: {{ .services | default "5" | quote }}
+      persistentvolumeclaims: {{ .pvcs | default "5" | quote }}
+{{- end }}
+
+{{- with .limits }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ printf "%s-limits" $.Values.namespace.name | quote }}
+  namespace: {{ $.Values.namespace.name | quote }}
+spec:
+  limits:
+      - type: Container
+        default:
+          cpu: {{ .default_cpu | default "100m" | quote }}
+          memory: {{ .default_memory | default "128Mi" | quote }}
+
+        defaultRequest:
+          cpu: {{ .default_cpu | default "100m" | quote }}
+          memory: {{ .default_memory | default "128Mi" | quote }}
+
+        max:
+          cpu: {{ $.Values.namespace.quota.cpu | default "1" | quote }}
+          memory: {{ $.Values.namespace.quota.memory | default "1Gi" | quote }}
+
+        min:
+          cpu: {{ .default_cpu | default "100m" | quote }}
+          memory: {{ .default_memory | default "128Mi" | quote }}
+{{- end }}
+{{- end }}

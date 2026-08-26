@@ -531,6 +531,27 @@ rbac:
               kind: ClusterRole
 ```
 
+ServiceAccount (объект SA создаётся автоматически из любой записи в `serviceAccounts`; `clusterRoles`/`namespaces` генерируют bindings):
+```yaml
+serviceAccounts:
+  ci-deployer:
+    saNamespace: ci                       # где живёт SA (default: "default")
+    labels:                               # опционально
+      team: platform
+    annotations:                          # опционально (IRSA/WIF)
+      eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/ci
+    imagePullSecrets:                     # опционально
+      - name: regcred
+    automountServiceAccountToken: false   # опционально
+    clusterRoles:
+      - cr-list-namespaces
+    namespaces:
+      - name: production
+        roles:
+          - name: edit
+            kind: ClusterRole
+```
+
 AppProject:
 ```yaml
 project:

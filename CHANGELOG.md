@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.4
+
+### Added
+- kubernetes-resources: создание объектов ServiceAccount (templates/serviceaccount.yaml) из секции `serviceAccounts`. Раньше секция использовалась только для RBAC bindings (`subjects` ссылались на SA, который должен был существовать); теперь любая запись автоматически создаёт SA-объект в `saNamespace`. Поддержка: `labels`, `annotations` (IRSA/WIF и т.п.), `imagePullSecrets`, `automountServiceAccountToken`
+- SA попадает в существующее rbac-Application (syncWave 1, после namespaces wave 0) — изменения argocd-render не требуются
+
+### Changed
+- Chart kubernetes-resources: version 0.1.0 → 0.2.0
+
 ## v0.4.3
 
 ### Fixed

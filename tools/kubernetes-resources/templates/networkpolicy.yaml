@@ -1,0 +1,22 @@
+{{- if or .Values.networkPolicies .Values.globalNetworkPolicies }}
+{{- range $name, $np := .Values.networkPolicies }}
+---
+apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $np.namespace | quote }}
+spec:
+{{ toYaml $np.spec | indent 2 }}
+{{- end }}
+
+{{- range $name, $gnp := .Values.globalNetworkPolicies }}
+---
+apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: {{ $name | quote }}
+spec:
+{{ toYaml $gnp.spec | indent 2 }}
+{{- end }}
+{{- end }}

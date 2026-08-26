@@ -1,0 +1,148 @@
+{{- if or .Values.clusterRoles .Values.users .Values.groups .Values.serviceAccounts }}
+{{- range $name, $cr := .Values.clusterRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+rules:
+{{ toYaml $cr.rules | indent 2 }}
+{{- end }}
+
+{{- range $uname, $user := .Values.users }}
+{{- range $user.clusterRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: crb-{{ $uname }}-user-{{ . }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.user: {{ $uname }}
+subjects:
+  - kind: User
+    name: {{ $uname }}
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: {{ . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+
+{{- range $gname, $group := .Values.groups }}
+{{- range $group.clusterRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: crb-{{ $gname }}-{{ . }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.group: {{ $gname }}
+subjects:
+  - kind: Group
+    name: {{ $gname }}
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: {{ . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+
+{{- range $sname, $sa := .Values.serviceAccounts }}
+{{- range $sa.clusterRoles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: crb-{{ $sname }}-sa-{{ . }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.sa: {{ $sname }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sname }}
+    namespace: {{ $sa.saNamespace | default "default" }}
+roleRef:
+  kind: ClusterRole
+  name: {{ . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+
+{{- range $uname, $user := .Values.users }}
+{{- range $ns := $user.namespaces }}
+{{- range $role := $ns.roles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rb-{{ $uname }}-{{ $ns.name }}-user-{{ $role.name }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.user: {{ $uname }}
+  namespace: {{ $ns.name }}
+subjects:
+  - kind: User
+    name: {{ $uname }}
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: {{ $role.kind | default "Role" }}
+  name: {{ $role.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- range $gname, $group := .Values.groups }}
+{{- range $ns := $group.namespaces }}
+{{- range $role := $ns.roles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rb-{{ $gname }}-{{ $ns.name }}-{{ $role.name }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.group: {{ $gname }}
+  namespace: {{ $ns.name }}
+subjects:
+  - kind: Group
+    name: {{ $gname }}
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: {{ $role.kind | default "Role" }}
+  name: {{ $role.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- range $sname, $sa := .Values.serviceAccounts }}
+{{- range $ns := $sa.namespaces }}
+{{- range $role := $ns.roles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rb-{{ $sname }}-{{ $ns.name }}-sa-{{ $role.name }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+    rbac.sa: {{ $sname }}
+  namespace: {{ $ns.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sname }}
+    namespace: {{ $sa.saNamespace | default "default" }}
+roleRef:
+  kind: {{ $role.kind | default "Role" }}
+  name: {{ $role.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

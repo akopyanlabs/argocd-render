@@ -1,0 +1,90 @@
+# namespace:
+#   name: my-namespace
+#   labels:
+#     env: production
+#   annotations:
+#     owner: team-x
+#   quota:
+#     cpu: "4"
+#     memory: 8Gi
+#     pods: "20"
+#     storage: "50Gi"
+#     services: "10"
+#     pvcs: "10"
+#   limits:
+#     cpu: 500m
+#     memory: 512Mi
+
+# clusterRoles:
+#   list-namespaces:
+#     rules:
+#       - apiGroups: [""]
+#         resources: ["namespaces"]
+#         verbs: ["get", "list"]
+
+# users:
+#   dev:
+#     clusterRoles:
+#       - cr-list-namespaces
+#     namespaces:
+#       - name: production
+#         roles:
+#           - name: view
+#             kind: ClusterRole
+
+# groups:
+#   admins:
+#     clusterRoles:
+#       - cluster-admin
+
+# serviceAccounts:
+#   ci-deployer:
+#     saNamespace: ci                       # namespace, где живёт SA (default: "default")
+#     labels:                               # опционально
+#       team: platform
+#     annotations:                          # опционально (IRSA/WIF и т.п.)
+#       eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/ci
+#     imagePullSecrets:                     # опционально (docker pull secret)
+#       - name: regcred
+#     automountServiceAccountToken: false   # опционально
+#     clusterRoles:
+#       - cr-list-namespaces
+#     namespaces:
+#       - name: production
+#         roles:
+#           - name: edit
+#             kind: ClusterRole
+
+# networkPolicies:
+#   deny-all-ingress:
+#     namespace: production
+#     spec:
+#       order: 1000
+#       selector: all()
+#       types:
+#         - Ingress
+#       ingress:
+#         - action: Deny
+
+# globalNetworkPolicies:
+#   default-deny:
+#     spec:
+#       order: 1000
+#       selector: all()
+#       types:
+#         - Ingress
+#       ingress:
+#         - action: Deny
+
+# project:
+#   name: production
+#   namespace: argocd-system
+#   description: Production environment
+#   sourceRepos:
+#     - "*"
+#   destinations:
+#     - namespace: "*"
+#       server: "*"
+#   namespaceResourceWhitelist:
+#     - group: "apps"
+#       kind: "Deployment"

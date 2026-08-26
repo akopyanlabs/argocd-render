@@ -28,7 +28,7 @@ ENV HELM_PLUGINS=/opt/helm-plugins \
 RUN   /custom-tools/helm plugin install https://github.com/jkroepke/helm-secrets.git && \
   chmod -R a+rX /opt/helm-plugins
 
-FROM quay.io/argoproj/argocd:v3.4.4
+FROM quay.io/argoproj/argocd:v3.5.0
 COPY --from=download /custom-tools/ /usr/local/bin/
 COPY --from=download /opt/helm-plugins /opt/helm-plugins
 # Re-declare ALL helm env vars in the final stage (ENV does not carry across
