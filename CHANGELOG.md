@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.1
+
+### Changed
+- Kyverno-инфра: директория stage `projects/<stage>/kyverno/` переименована в `kyvernopolicy/` (по аналогии с `networkpolicy/`). Соответственно переименованы Application `<stage>-kyverno` → `<stage>-kyvernopolicy`, выходной каталог `rendered/<stage>/kyverno` → `rendered/<stage>/kyvernopolicy` и release name. Секции values чарта (`clusterPolicies`/`policies`) не изменились. Миграция: переименовать директорию в gitops-репозитории; старый Application `<stage>-kyverno` удалить из кластера (cleanupStaleApps сделает это при следующем рендере)
+
 ## v0.5.0
 
 ### Added

@@ -839,7 +839,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 	}
 
 	// 5. Kyverno (syncWave: 3, aggregated)
-	kyDir := filepath.Join(stageDir, "kyverno")
+	kyDir := filepath.Join(stageDir, "kyvernopolicy")
 	kyConfig := loadInfraAppConfig(kyDir)
 	kyFiles := discoverInfraFiles(kyDir)
 	if len(kyFiles) > 0 {
@@ -848,22 +848,22 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			kyValues = deepMerge(kyValues, loadYAML(f))
 		}
 		if len(kyValues) > 0 {
-			outDir := filepath.Join(outputBase, "kyverno")
+			outDir := filepath.Join(outputBase, "kyvernopolicy")
 			os.RemoveAll(outDir)
-			if _, err := helmTemplateToDir(chartDir, "kyverno", "default", kyValues, outDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR render kyverno: %v\n", err)
+			if _, err := helmTemplateToDir(chartDir, "kyvernopolicy", "default", kyValues, outDir); err != nil {
+				fmt.Fprintf(os.Stderr, "  ERROR render kyvernopolicy: %v\n", err)
 			} else {
-				appName := stageName + "-kyverno"
-				active["kyverno"] = true
+				appName := stageName + "-kyvernopolicy"
+				active["kyvernopolicy"] = true
 				app, _ := renderTemplate("application.yaml", map[string]string{
 					"name":      appName,
 					"sync_wave": "3",
 					"stage":     stageName,
-					"app_name":  "kyverno",
+					"app_name":  "kyvernopolicy",
 					"project":   rootProject,
 					"repo_url":  hubRepoURL,
 					"branch":    branch,
-					"path":      "rendered/" + stageName + "/kyverno",
+					"path":      "rendered/" + stageName + "/kyvernopolicy",
 					"server":    server,
 					"namespace": "default",
 				})
@@ -872,7 +872,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 				}
-				fmt.Printf("  Rendered infra: kyverno (%d files)\n", len(kyFiles))
+				fmt.Printf("  Rendered infra: kyvernopolicy (%d files)\n", len(kyFiles))
 			}
 		}
 	}
@@ -1044,12 +1044,12 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 	}
 
 	// 5. Kyverno (syncWave: 3, aggregated valueFiles)
-	kyDir := filepath.Join(stageDir, "kyverno")
+	kyDir := filepath.Join(stageDir, "kyvernopolicy")
 	kyConfig := loadInfraAppConfig(kyDir)
 	kyFiles := discoverInfraFiles(kyDir)
 	if len(kyFiles) > 0 {
-		appName := stageName + "-kyverno"
-		active["kyverno"] = true
+		appName := stageName + "-kyvernopolicy"
+		active["kyvernopolicy"] = true
 
 		chartDirAbs := filepath.Join(chartsDir, kubernetesResourcesChart)
 		chartValues := chartValuesFile(chartDirAbs)
@@ -1062,14 +1062,14 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			"name":         appName,
 			"sync_wave":    "3",
 			"stage":        stageName,
-			"app_name":     "kyverno",
+			"app_name":     "kyvernopolicy",
 			"project":      rootProject,
 			"repo_url":     hubRepoURL,
 			"branch":       branch,
 			"chart_path":   "charts/" + kubernetesResourcesChart,
 			"chart_values": chartValues,
 			"values_path":  relPaths[0],
-			"release_name": "kyverno",
+			"release_name": "kyvernopolicy",
 			"server":       server,
 			"namespace":    "default",
 		})
@@ -1089,7 +1089,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			applyAppSettings(app, kyConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Application: kyverno (helm, %d files)\n", len(kyFiles))
+		fmt.Printf("  Application: kyvernopolicy (helm, %d files)\n", len(kyFiles))
 	}
 
 	return active

@@ -280,7 +280,7 @@ argocd-render --help
 │       ├── namespaces/
 │       ├── rbac/
 │       ├── networkpolicy/
-│       └── kyverno/                         # Kyverno-политики (values для чарта)
+│       └── kyvernopolicy/                  # Kyverno-политики (values для чарта)
 ├── charts/
 │   ├── universal-helm-chart/                # Helm-чарт приложения
 │   │   ├── Chart.yaml
@@ -480,7 +480,7 @@ application:
 | приложение (`apps/`) | `true` | устаревшие ресурсы очищаются при обновлениях релиза |
 | rbac | `true` | аккумулируется из всех файлов, синхронизация должна сходиться |
 | networkpolicy | `true` | устаревшие политики должны удаляться |
-| kyverno | `true` | устаревшие политики должны удаляться |
+| kyvernopolicy | `true` | устаревшие политики должны удаляться |
 | repo bootstrap | `false` | хардкод, не должен пруниться |
 
 Остальные дефолты:
@@ -532,7 +532,7 @@ projects/<stage>/
 │   ├── app.yaml          ← кастомизация syncPolicy
 │   ├── deny-all.yaml
 │   └── deny-all-rvc1.yaml
-├── kyverno/
+├── kyvernopolicy/
 │   ├── app.yaml          ← кастомизация syncPolicy
 │   └── require-labels.yaml
 ├── rbac/
@@ -571,7 +571,7 @@ syncOptions:
 
 | Параметр | По умолчанию |
 |----------|-------------|
-| `prune` | `false` для namespaces, `true` для rbac/networkpolicy/kyverno |
+| `prune` | `false` для namespaces, `true` для rbac/networkpolicy/kyvernopolicy |
 | `selfHeal` | `true` |
 | `syncOptions` | `["ServerSideApply=true", "RespectIgnoreDifferences=true"]` |
 | `finalizers` | `["resources-finalizer.argocd.argoproj.io"]` |
@@ -624,7 +624,7 @@ serviceAccounts:
             kind: ClusterRole
 ```
 
-Kyverno-политики (`projects/<stage>/kyverno/*.yaml`, отдельное Application `<stage>-kyverno`, syncWave 3):
+Kyverno-политики (`projects/<stage>/kyvernopolicy/*.yaml`, отдельное Application `<stage>-kyvernopolicy`, syncWave 3):
 ```yaml
 clusterPolicies:                     # ClusterPolicy — кластерные
   require-labels:
