@@ -868,6 +868,9 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					"namespace": "default",
 				})
 				if app != nil {
+					// Kyverno policies are mutated by admission webhooks —
+					// without server-side diff ArgoCD sees perpetual drift.
+					setAppAnnotation(app, "argocd.argoproj.io/compare-options", "ServerSideDiff=true,IncludeMutationWebhook=true")
 					applyAppSettings(app, kyConfig, nil)
 					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
@@ -1086,6 +1089,9 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			}
 		}
 		if app != nil {
+			// Kyverno policies are mutated by admission webhooks —
+			// without server-side diff ArgoCD sees perpetual drift.
+			setAppAnnotation(app, "argocd.argoproj.io/compare-options", "ServerSideDiff=true,IncludeMutationWebhook=true")
 			applyAppSettings(app, kyConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
@@ -2431,6 +2437,22 @@ func setNestedKey(m map[string]interface{}, value interface{}, keys ...string) {
 		m = v
 	}
 	m[keys[len(keys)-1]] = value
+}
+
+// setAppAnnotation writes an annotation into an Application's metadata,
+// creating the annotations map when the template did not render one.
+func setAppAnnotation(app map[string]interface{}, key, value string) {
+	meta, _ := app["metadata"].(map[string]interface{})
+	if meta == nil {
+		meta = make(map[string]interface{})
+		app["metadata"] = meta
+	}
+	ann, _ := meta["annotations"].(map[string]interface{})
+	if ann == nil {
+		ann = make(map[string]interface{})
+		meta["annotations"] = ann
+	}
+	ann[key] = value
 }
 
 // --- Main ---

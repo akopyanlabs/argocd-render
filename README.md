@@ -624,7 +624,7 @@ serviceAccounts:
             kind: ClusterRole
 ```
 
-Kyverno-политики (`projects/<stage>/kyvernopolicy/*.yaml`, отдельное Application `<stage>-kyvernopolicy`, syncWave 3):
+Kyverno-политики (`projects/<stage>/kyvernopolicy/*.yaml`, отдельное Application `<stage>-kyvernopolicy`, syncWave 3). Application получает аннотацию `argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true` — Kyverno мутирует ресурсы через admission-webhook, и без server-side diff ArgoCD показывает вечный drift:
 ```yaml
 clusterPolicies:                     # ClusterPolicy — кластерные
   require-labels:

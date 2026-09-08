@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.2
+
+### Added
+- Application `<stage>-kyvernopolicy` получает аннотацию `argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true` (оба режима). Kyverno-политики мутируются admission-webhook'ами — без server-side diff ArgoCD показывает вечный drift на этих ресурсах
+
 ## v0.5.1
 
 ### Changed
