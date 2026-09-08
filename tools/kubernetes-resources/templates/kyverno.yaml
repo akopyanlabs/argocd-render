@@ -7,6 +7,13 @@ metadata:
   name: {{ $name | quote }}
   labels:
     app.kubernetes.io/managed-by: argocd-render
+    {{- with $cp.labels }}
+{{ toYaml . | indent 4 }}
+    {{- end }}
+  {{- with $cp.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
 spec:
 {{ toYaml $cp.spec | indent 2 }}
 {{- end }}
@@ -20,6 +27,13 @@ metadata:
   namespace: {{ $p.namespace | default "default" | quote }}
   labels:
     app.kubernetes.io/managed-by: argocd-render
+    {{- with $p.labels }}
+{{ toYaml . | indent 4 }}
+    {{- end }}
+  {{- with $p.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
 spec:
 {{ toYaml $p.spec | indent 2 }}
 {{- end }}

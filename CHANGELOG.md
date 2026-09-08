@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.3
+
+### Added
+- kubernetes-resources: опциональные `annotations` и `labels` для Kyverno-политик (`clusterPolicies`/`policies` values) — аннотации `policies.kyverno.io/*` (title, category, severity, description) попадают в PolicyReport и `kubectl describe`
+- values-пример чарта: политика `restrict-external-ips` (блокировка `Service.spec.externalIPs`, MITM-вектор CVE-2020-8554) + `background: true`
+- README: best practices GitOps policy-as-code (Audit → Enforce через Git, PolicyReport, syncWave при деплое самого Kyverno)
+
+### Changed
+- Chart kubernetes-resources: version 0.3.0 → 0.4.0 (изменений argocd-render нет — только чарт и документация)
+
 ## v0.5.2
 
 ### Added

@@ -78,8 +78,15 @@
 
 # clusterPolicies:                        # Kyverno ClusterPolicy (кластерные)
 #   require-labels:
+#     annotations:                        # опционально (policies.kyverno.io/*)
+#       policies.kyverno.io/title: Require Labels
+#       policies.kyverno.io/category: Pod Security
+#       policies.kyverno.io/severity: medium
+#     labels:                             # опционально
+#       team: platform
 #     spec:
 #       validationFailureAction: Enforce
+#       background: true
 #       rules:
 #         - name: require-team-label
 #           match:
@@ -92,10 +99,32 @@
 #               metadata:
 #                 labels:
 #                   team: "?*"
+#
+#   restrict-external-ips:                # MITM via Service externalIPs (CVE-2020-8554)
+#     annotations:
+#       policies.kyverno.io/title: Restrict External IPs
+#       policies.kyverno.io/category: Kubernetes Security
+#       policies.kyverno.io/severity: high
+#     spec:
+#       validationFailureAction: Audit
+#       background: true
+#       rules:
+#         - name: check-external-ips
+#           match:
+#             any:
+#               - resources:
+#                   kinds: ["Service"]
+#           validate:
+#             message: "externalIPs are not allowed"
+#             pattern:
+#               spec:
+#                 =(externalIPs): "null"
 
 # policies:                               # Kyverno Policy (namespaced)
 #   restrict-image-pull:
 #     namespace: production               # default: "default"
+#     annotations:
+#       policies.kyverno.io/title: Allowed Registries
 #     spec:
 #       validationFailureAction: Audit
 #       rules:
