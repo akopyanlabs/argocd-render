@@ -4,7 +4,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $name }}
+  name: cr-{{ $name }}
   labels:
     app.kubernetes.io/managed-by: argocd-render
 rules:
