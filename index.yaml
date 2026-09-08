@@ -1,0 +1,12 @@
+apiVersion: v1
+entries:
+  kubernetes-resources:
+  - apiVersion: v2
+    created: "2026-09-08T13:22:42.593046237Z"
+    digest: 83b5d89a8a10c003ffe94a898c19d7574841a4c5e869013a68ef9eb7ddc5c4ae
+    name: kubernetes-resources
+    type: application
+    urls:
+    - https://github.com/akopyanlabs/argocd-render/releases/download/kubernetes-resources-0.3.0/kubernetes-resources-0.3.0.tgz
+    version: 0.3.0
+generated: "2026-09-08T13:22:42.593049521Z"
