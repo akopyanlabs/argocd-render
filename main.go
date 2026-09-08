@@ -631,6 +631,7 @@ func renderProject(stageDir, stageName string, stageMeta map[string]interface{})
 		"namespaceResourceWhitelist": stageMeta["namespaceResourceWhitelist"],
 		"namespaceResourceBlacklist": stageMeta["namespaceResourceBlacklist"],
 		"sourceNamespaces":           sourceNS,
+		"orphanedResources":          stageMeta["orphanedResources"],
 	}
 
 	projOutDir := filepath.Join(repoRoot, "rendered", "argocd", "projects")
@@ -837,6 +838,45 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 		}
 	}
 
+	// 5. Kyverno (syncWave: 3, aggregated)
+	kyDir := filepath.Join(stageDir, "kyverno")
+	kyConfig := loadInfraAppConfig(kyDir)
+	kyFiles := discoverInfraFiles(kyDir)
+	if len(kyFiles) > 0 {
+		kyValues := make(map[string]interface{})
+		for _, f := range kyFiles {
+			kyValues = deepMerge(kyValues, loadYAML(f))
+		}
+		if len(kyValues) > 0 {
+			outDir := filepath.Join(outputBase, "kyverno")
+			os.RemoveAll(outDir)
+			if _, err := helmTemplateToDir(chartDir, "kyverno", "default", kyValues, outDir); err != nil {
+				fmt.Fprintf(os.Stderr, "  ERROR render kyverno: %v\n", err)
+			} else {
+				appName := stageName + "-kyverno"
+				active["kyverno"] = true
+				app, _ := renderTemplate("application.yaml", map[string]string{
+					"name":      appName,
+					"sync_wave": "3",
+					"stage":     stageName,
+					"app_name":  "kyverno",
+					"project":   rootProject,
+					"repo_url":  hubRepoURL,
+					"branch":    branch,
+					"path":      "rendered/" + stageName + "/kyverno",
+					"server":    server,
+					"namespace": "default",
+				})
+				if app != nil {
+					applyAppSettings(app, kyConfig, nil)
+					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
+					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+				}
+				fmt.Printf("  Rendered infra: kyverno (%d files)\n", len(kyFiles))
+			}
+		}
+	}
+
 	return active
 }
 
@@ -1001,6 +1041,55 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
 		fmt.Printf("  Application: networkpolicy (helm, %d files)\n", len(npFiles))
+	}
+
+	// 5. Kyverno (syncWave: 3, aggregated valueFiles)
+	kyDir := filepath.Join(stageDir, "kyverno")
+	kyConfig := loadInfraAppConfig(kyDir)
+	kyFiles := discoverInfraFiles(kyDir)
+	if len(kyFiles) > 0 {
+		appName := stageName + "-kyverno"
+		active["kyverno"] = true
+
+		chartDirAbs := filepath.Join(chartsDir, kubernetesResourcesChart)
+		chartValues := chartValuesFile(chartDirAbs)
+		var relPaths []string
+		for _, f := range kyFiles {
+			relPaths = append(relPaths, yamlChartRelPath(chartDirAbs, f))
+		}
+
+		app, _ := renderTemplate("application-helm.yaml", map[string]string{
+			"name":         appName,
+			"sync_wave":    "3",
+			"stage":        stageName,
+			"app_name":     "kyverno",
+			"project":      rootProject,
+			"repo_url":     hubRepoURL,
+			"branch":       branch,
+			"chart_path":   "charts/" + kubernetesResourcesChart,
+			"chart_values": chartValues,
+			"values_path":  relPaths[0],
+			"release_name": "kyverno",
+			"server":       server,
+			"namespace":    "default",
+		})
+		if app != nil && len(relPaths) > 1 {
+			spec, _ := app["spec"].(map[string]interface{})
+			if spec != nil {
+				source, _ := spec["source"].(map[string]interface{})
+				if source != nil {
+					helm, _ := source["helm"].(map[string]interface{})
+					if helm != nil {
+						helm["valueFiles"] = append([]string{chartValues}, relPaths...)
+					}
+				}
+			}
+		}
+		if app != nil {
+			applyAppSettings(app, kyConfig, nil)
+			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+		}
+		fmt.Printf("  Application: kyverno (helm, %d files)\n", len(kyFiles))
 	}
 
 	return active
@@ -1199,8 +1288,23 @@ func helmTemplateToDir(chartDir, releaseName, namespace string, valuesData map[s
 	}
 
 	os.MkdirAll(outputDir, 0755)
+	written, err := writeDocs(out, outputDir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return written, nil
+}
+
+// writeDocs decodes a multi-doc YAML stream and writes every document to
+// outputDir/<kind>/<name>.yaml. conflict holds object keys ("kind/name", kind
+// lowercased) already rendered by another part of the app — hitting one is an
+// error (helm chart and manifests/ must not define the same object). nil
+// disables the check.
+func writeDocs(data []byte, outputDir string, conflict map[string]bool) ([]string, error) {
+	os.MkdirAll(outputDir, 0755)
 	var written []string
-	decoder := yaml.NewDecoder(bytes.NewReader(out))
+	var conflictErr error
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	for {
 		var doc map[string]interface{}
 		if err := decoder.Decode(&doc); err != nil {
@@ -1222,7 +1326,15 @@ func helmTemplateToDir(chartDir, releaseName, namespace string, valuesData map[s
 				name = n
 			}
 		}
-		kindDir := filepath.Join(outputDir, strings.ToLower(kind))
+		kindKey := strings.ToLower(kind)
+		if conflict != nil {
+			if conflict[kindKey+"/"+name] {
+				conflictErr = fmt.Errorf("object %s/%s is defined by both the helm chart and manifests/", kind, name)
+				break
+			}
+			conflict[kindKey+"/"+name] = true
+		}
+		kindDir := filepath.Join(outputDir, kindKey)
 		os.MkdirAll(kindDir, 0755)
 		outFile := filepath.Join(kindDir, name+".yaml")
 		if err := writeYAML(outFile, doc); err != nil {
@@ -1231,7 +1343,71 @@ func helmTemplateToDir(chartDir, releaseName, namespace string, valuesData map[s
 		}
 		written = append(written, outFile)
 	}
-	return written, nil
+	return written, conflictErr
+}
+
+// manifestYAMLFiles returns the sorted list of YAML files directly inside
+// appDir/manifests (the raw part of a hybrid app). Empty when the dir is
+// missing or has no YAML.
+func manifestYAMLFiles(appDir string) []string {
+	dir := filepath.Join(appDir, "manifests")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(e.Name())
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		files = append(files, filepath.Join(dir, e.Name()))
+	}
+	sort.Strings(files)
+	return files
+}
+
+// hasEncryptedManifest reports whether any manifests/ file carries SOPS
+// encryption — such an app needs the SOPS encrypt/decrypt cycle even without
+// a helm secrets values file.
+func hasEncryptedManifest(files []string) bool {
+	for _, f := range files {
+		if isSOPSEncrypted(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// writtenObjects collects "kind/name" keys from an output dir laid out as
+// <kind>/<name>.yaml — the collision set for the raw part of a hybrid app.
+func writtenObjects(outputDir string) map[string]bool {
+	keys := make(map[string]bool)
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return keys
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(outputDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			name := f.Name()
+			ext := filepath.Ext(name)
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			keys[e.Name()+"/"+strings.TrimSuffix(name, ext)] = true
+		}
+	}
+	return keys
 }
 
 func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides map[string]interface{}) (string, string, map[string]interface{}) {
@@ -1251,32 +1427,43 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 	}
 	stageName := filepath.Base(stageDir)
 
-	chartDir := filepath.Join(chartsDir, chartName)
-	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
+	// Hybrid apps: the helm part (chartName in app.yaml) and the raw part
+	// (manifests/ dir) are independent — an app may have either or both.
+	manifests := manifestYAMLFiles(appDir)
+	if chartName == "" && len(manifests) == 0 {
 		return "skip", instanceName, nil
+	}
+	chartDir := filepath.Join(chartsDir, chartName)
+	if chartName != "" {
+		if _, err := os.Stat(chartDir); os.IsNotExist(err) {
+			return "skip", instanceName, nil
+		}
 	}
 
 	appOutput := filepath.Join(outputBase, renderedAppsDir, instanceName)
-	envValues := yamlPath(filepath.Join(appDir, "values"))
-	secretsFile := yamlPath(filepath.Join(appDir, "secrets"))
 	hasSOPS := false
-	if _, err := os.Stat(secretsFile); err == nil {
-		hasSOPS = true
-	}
-
-	values := mergeValues(chartDir, envValues)
-
-	if hasSOPS {
-		secrets, err := decryptSOPS(secretsFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR decrypt %s: %v\n", secretsFile, err)
-			return "error", instanceName, nil
+	var values map[string]interface{}
+	if chartName != "" {
+		envValues := yamlPath(filepath.Join(appDir, "values"))
+		values = mergeValues(chartDir, envValues)
+		secretsFile := yamlPath(filepath.Join(appDir, "secrets"))
+		if _, err := os.Stat(secretsFile); err == nil {
+			hasSOPS = true
+			secrets, err := decryptSOPS(secretsFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  ERROR decrypt %s: %v\n", secretsFile, err)
+				return "error", instanceName, nil
+			}
+			values = deepMerge(values, secrets)
 		}
-		values = deepMerge(values, secrets)
+		// --set overrides only affect the helm part; raw manifests have no values
+		if len(cliOverrides) > 0 {
+			values = deepMerge(values, cliOverrides)
+		}
 	}
-
-	if len(cliOverrides) > 0 {
-		values = deepMerge(values, cliOverrides)
+	// SOPS-encrypted docs inside manifests/ count as secrets too
+	if !hasSOPS && hasEncryptedManifest(manifests) {
+		hasSOPS = true
 	}
 
 	var encryptKindsList []string
@@ -1300,12 +1487,41 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 
 	os.RemoveAll(appOutput)
 
-	renderedFiles, err := helmTemplateToDir(chartDir, instanceName, namespace, values, appOutput)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR render %s: %v\n", instanceName, err)
-		return "error", instanceName, nil
+	if chartName != "" {
+		if _, err := helmTemplateToDir(chartDir, instanceName, namespace, values, appOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "  ERROR render %s: %v\n", instanceName, err)
+			return "error", instanceName, nil
+		}
 	}
-	_ = renderedFiles
+
+	if len(manifests) > 0 {
+		var buf bytes.Buffer
+		for _, mf := range manifests {
+			data, err := os.ReadFile(mf)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  ERROR read %s: %v\n", mf, err)
+				return "error", instanceName, nil
+			}
+			content := string(data)
+			if isSOPSEncrypted(mf) {
+				plain, err := decryptContent(content)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  ERROR decrypt manifest %s: %v\n", mf, err)
+					return "error", instanceName, nil
+				}
+				content = plain
+			}
+			buf.WriteString(content)
+			if !strings.HasSuffix(content, "\n") {
+				buf.WriteString("\n")
+			}
+			buf.WriteString("---\n")
+		}
+		if _, err := writeDocs(buf.Bytes(), appOutput, writtenObjects(appOutput)); err != nil {
+			fmt.Fprintf(os.Stderr, "  ERROR render %s: %v\n", instanceName, err)
+			return "error", instanceName, nil
+		}
+	}
 
 	if hasSOPS {
 		encryptSOPSSecrets(appOutput, encryptKindsList, saved)
@@ -1319,6 +1535,7 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 		"stage":             stageName,
 		"ignoreDifferences": ignoreDiffs,
 		"hasSops":           hasSOPS,
+		"hasManifests":      len(manifests) > 0,
 		"syncWave":          syncWave,
 		"application":       appMeta["application"],
 	}
@@ -1326,7 +1543,7 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 
 // --- Application generation ---
 
-func generateAppApplication(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch string) map[string]interface{} {
+func generateAppApplication(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch, path string) map[string]interface{} {
 	stage, _ := appMeta["stage"].(string)
 	instanceName, _ := appMeta["instanceName"].(string)
 	namespace, _ := appMeta["namespace"].(string)
@@ -1348,7 +1565,7 @@ func generateAppApplication(appMeta map[string]interface{}, stageMeta map[string
 		"project":   project,
 		"repo_url":  repoURL,
 		"branch":    branch,
-		"path":      "rendered/" + stage + "/" + renderedAppsDir + "/" + instanceName,
+		"path":      path,
 		"server":    server,
 		"namespace": namespace,
 	})
@@ -1426,7 +1643,63 @@ func generateAppApplicationHelm(appMeta map[string]interface{}, stageMeta map[st
 	return app
 }
 
-func generateSOPSApplication(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch string) map[string]interface{} {
+// generateMixedApplication builds a multi-source Application for a hybrid app
+// (helm chart + raw manifests/): the first source renders the chart with the
+// app valueFiles, the second points at manifests/ as a plain directory.
+func generateMixedApplication(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch string) map[string]interface{} {
+	stage, _ := appMeta["stage"].(string)
+	instanceName, _ := appMeta["instanceName"].(string)
+	chartName, _ := appMeta["chartName"].(string)
+	namespace, _ := appMeta["namespace"].(string)
+	project, _ := appMeta["project"].(string)
+	server, _ := stageMeta["server"].(string)
+	if server == "" {
+		server = "https://kubernetes.default.svc"
+	}
+	syncWave, _ := appMeta["syncWave"].(string)
+	if syncWave == "" {
+		syncWave = "10"
+	}
+
+	valuesExt := ".yaml"
+	if _, err := os.Stat(filepath.Join(repoRoot, "projects", stage, "apps", instanceName, "values.yml")); err == nil {
+		valuesExt = ".yml"
+	}
+	chartDirAbs := filepath.Join(chartsDir, chartName)
+	app, err := renderTemplate("application-mixed.yaml", map[string]string{
+		"name":           stage + "-" + instanceName,
+		"sync_wave":      syncWave,
+		"stage":          stage,
+		"app_name":       instanceName,
+		"project":        project,
+		"repo_url":       repoURL,
+		"branch":         branch,
+		"chart_path":     "charts/" + chartName,
+		"chart_values":   chartValuesFile(chartDirAbs),
+		"values_path":    "../../projects/" + stage + "/apps/" + instanceName + "/values" + valuesExt,
+		"manifests_path": "projects/" + stage + "/apps/" + instanceName + "/manifests",
+		"release_name":   instanceName,
+		"server":         server,
+		"namespace":      namespace,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  ERROR generate mixed application: %v\n", err)
+		return nil
+	}
+
+	if ignoreDiffs, ok := appMeta["ignoreDifferences"]; ok && ignoreDiffs != nil {
+		spec, _ := app["spec"].(map[string]interface{})
+		if spec != nil {
+			spec["ignoreDifferences"] = ignoreDiffs
+		}
+	}
+
+	applyAppSettings(app, appMeta, nil)
+
+	return app
+}
+
+func generateSOPSApplication(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch, path string) map[string]interface{} {
 	stage, _ := appMeta["stage"].(string)
 	instanceName, _ := appMeta["instanceName"].(string)
 	namespace, _ := appMeta["namespace"].(string)
@@ -1448,7 +1721,7 @@ func generateSOPSApplication(appMeta map[string]interface{}, stageMeta map[strin
 		"project":   project,
 		"repo_url":  repoURL,
 		"branch":    branch,
-		"path":      "projects/" + stage + "/apps/" + instanceName,
+		"path":      path,
 		"server":    server,
 		"namespace": namespace,
 	})
@@ -1658,7 +1931,7 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 				case "rendered":
 					fmt.Printf("  Rendered app: %s\n", r.name)
 				case "skip":
-					fmt.Printf("  SKIP %s: chart not found\n", r.name)
+					fmt.Printf("  SKIP %s: no chart and no manifests/\n", r.name)
 				case "error":
 					fmt.Fprintf(os.Stderr, "  ERROR rendering %s\n", r.name)
 				}
@@ -1673,7 +1946,8 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 		for _, r := range results {
 			if r.status == "rendered" && r.meta != nil {
 				activeApps[r.name] = true
-				appYAML := generateAppApplication(r.meta, stageMeta, repoURL, branch)
+				path := "rendered/" + stageName + "/" + renderedAppsDir + "/" + r.name
+				appYAML := generateAppApplication(r.meta, stageMeta, repoURL, branch, path)
 				if appYAML != nil {
 					writeYAML(filepath.Join(argocdAppsDir, stageName+"-"+r.name+".yaml"), appYAML)
 				}
@@ -1716,12 +1990,26 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 		for _, ad := range appDirs {
 			appMetaFile := loadYAML(yamlPath(filepath.Join(ad, "app")))
 			instanceName := filepath.Base(ad)
+			manifests := manifestYAMLFiles(ad)
+			chartName, _ := appMetaFile["chartName"].(string)
+			if chartName == "" && len(manifests) == 0 {
+				fmt.Printf("  SKIP %s: no chart and no manifests/\n", instanceName)
+				continue
+			}
+			if chartName != "" {
+				if _, err := os.Stat(filepath.Join(chartsDir, chartName)); os.IsNotExist(err) {
+					fmt.Printf("  SKIP %s: chart not found\n", instanceName)
+					continue
+				}
+			}
 			secretsFile := yamlPath(filepath.Join(ad, "secrets"))
 			hasSOPS := false
 			if _, err := os.Stat(secretsFile); err == nil {
 				hasSOPS = true
 			}
-			chartName, _ := appMetaFile["chartName"].(string)
+			if !hasSOPS && hasEncryptedManifest(manifests) {
+				hasSOPS = true
+			}
 			namespace, _ := appMetaFile["namespace"].(string)
 			project, _ := appMetaFile["project"].(string)
 			if project == "" {
@@ -1739,23 +2027,40 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 				"stage":             stageName,
 				"ignoreDifferences": appMetaFile["ignoreDifferences"],
 				"hasSops":           hasSOPS,
+				"hasManifests":      len(manifests) > 0,
 				"syncWave":          syncWave,
 				"application":       appMetaFile["application"],
 			}
 			activeApps[instanceName] = true
 
+			appDirRel := "projects/" + stageName + "/apps/" + instanceName
+			manifestsPath := appDirRel + "/manifests"
 			var appYAML map[string]interface{}
-			if hasSOPS {
-				appYAML = generateSOPSApplication(meta, stageMeta, repoURL, branch)
-			} else {
+			mode := ""
+			switch {
+			case hasSOPS:
+				// The sops plugin covers the whole app: helm part with secret
+				// values plus raw manifests (sops-generate.sh emits both).
+				sopsPath := appDirRel
+				if chartName == "" {
+					// Raw-only: point straight at manifests/ — the CMP fallback
+					// branch decrypts everything, no app.yaml in cwd.
+					sopsPath = manifestsPath
+				}
+				appYAML = generateSOPSApplication(meta, stageMeta, repoURL, branch, sopsPath)
+				mode = "sops"
+			case chartName != "" && len(manifests) > 0:
+				appYAML = generateMixedApplication(meta, stageMeta, repoURL, branch)
+				mode = "helm+raw"
+			case chartName != "":
 				appYAML = generateAppApplicationHelm(meta, stageMeta, repoURL, branch)
+				mode = "helm"
+			default:
+				appYAML = generateAppApplication(meta, stageMeta, repoURL, branch, manifestsPath)
+				mode = "raw"
 			}
 			if appYAML != nil {
 				writeYAML(filepath.Join(argocdAppsDir, stageName+"-"+instanceName+".yaml"), appYAML)
-			}
-			mode := "helm"
-			if hasSOPS {
-				mode = "sops"
 			}
 			fmt.Printf("  Application: %s (%s)\n", instanceName, mode)
 		}

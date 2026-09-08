@@ -10,6 +10,10 @@ spec:
   sourceNamespaces:
 {{ toYaml . | indent 4 }}
 {{- end }}
+{{- with .Values.orphanedResources }}
+  orphanedResources:
+{{ toYaml . | indent 4 }}
+{{- end }}
   sourceRepos:
 {{ toYaml .Values.sourceRepos | indent 4 }}
   destinations:

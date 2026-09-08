@@ -76,15 +76,41 @@
 #       ingress:
 #         - action: Deny
 
-# project:
-#   name: production
-#   namespace: argocd-system
-#   description: Production environment
-#   sourceRepos:
-#     - "*"
-#   destinations:
-#     - namespace: "*"
-#       server: "*"
-#   namespaceResourceWhitelist:
-#     - group: "apps"
-#       kind: "Deployment"
+# clusterPolicies:                        # Kyverno ClusterPolicy (кластерные)
+#   require-labels:
+#     spec:
+#       validationFailureAction: Enforce
+#       rules:
+#         - name: require-team-label
+#           match:
+#             any:
+#               - resources:
+#                   kinds: ["Pod"]
+#           validate:
+#             message: "Label 'team' is required"
+#             pattern:
+#               metadata:
+#                 labels:
+#                   team: "?*"
+
+# policies:                               # Kyverno Policy (namespaced)
+#   restrict-image-pull:
+#     namespace: production               # default: "default"
+#     spec:
+#       validationFailureAction: Audit
+#       rules:
+#         - name: allowed-registries
+#           match:
+#             any:
+#               - resources:
+#                   kinds: ["Pod"]
+#           validate:
+#             message: "Only internal registry is allowed"
+#             pattern:
+#               spec:
+#                 containers:
+#                   - image: "registry.example.com/*"
+
+# Поля AppProject (sourceRepos, destinations, orphanedResources и т.д.) через
+# values не задаются: AppProject генерирует `argocd-render` из main.yaml stage
+# (см. README, секция main.yaml).

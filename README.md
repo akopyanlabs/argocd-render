@@ -5,6 +5,9 @@ CLI-утилита для рендеринга Helm-чартов и генера
 ## Возможности
 
 - Два режима работы: генерация Application CR (default) и полный рендер в raw YAML (full-render)
+- Гибридные приложения: helm-чарт + raw-манифесты (`manifests/`) в одном приложении
+- Инфраструктура: namespaces, RBAC, ServiceAccounts, NetworkPolicy, Kyverno-политики (чарт kubernetes-resources)
+- Orphaned resources мониторинг в AppProject (main.yaml → `orphanedResources`)
 - Интеграция с SOPS (age) для шифрования секретов
 - Параллельный рендеринг приложений
 - Кэширование зависимостей Helm (MD5)
@@ -269,9 +272,15 @@ argocd-render --help
 │   └── <stage>/
 │       ├── main.yaml                        # конфиг stage
 │       ├── apps/
+│       │   └── <app>/
+│       │       ├── app.yaml                 # chartName (helm-часть) и/или manifests/
+│       │       ├── values.yaml
+│       │       ├── secrets.yaml             # SOPS values (helm-часть)
+│       │       └── manifests/               # raw-манифесты (yaml как есть)
 │       ├── namespaces/
 │       ├── rbac/
-│       └── networkpolicy/
+│       ├── networkpolicy/
+│       └── kyverno/                         # Kyverno-политики (values для чарта)
 ├── charts/
 │   ├── universal-helm-chart/                # Helm-чарт приложения
 │   │   ├── Chart.yaml
@@ -282,10 +291,12 @@ argocd-render --help
 │   │   ├── Chart.yaml
 │   │   ├── values.yaml
 │   │   └── templates/
-│   │       ├── namespace.yaml               # {{- with .Values.namespace }}
-│   │       ├── rbac.yaml                    # {{- with .Values.rbac }}
-│   │       ├── networkpolicy.yaml           # {{- with .Values.networkpolicy }}
-│   │       └── project.yaml                 # {{- with .Values.project }}
+│   │       ├── namespace.yaml
+│   │       ├── rbac.yaml
+│   │       ├── serviceaccount.yaml
+│   │       ├── networkpolicy.yaml
+│   │       ├── kyverno.yaml
+│   │       └── project.yaml
 │   └── my-app/                              # кастомный чарт
 │       ├── Chart.yaml
 │       └── ...
@@ -327,11 +338,18 @@ sourceRepos:                                      # внешние репози�
 projectSourceRepos:                               # helm-репо URLs → AppProject sourceRepos (опционально)
   - https://helm.example.com/charts
   - https://charts.helm.sh/stable
+orphanedResources:                                # мониторинг orphaned-ресурсов (опционально)
+  warn: true
+  ignore:
+    - kind: Secret
+      name: "*.example.com"
 ```
 
 `projectNamespace` — признак gitops-репозитория. Если задан, bootstrap-приложение создаётся в этом namespace, а рендер требует наличия `projects/root-project.yaml`. Если не задан (репозиторий приложения) — конфиг argocd не требуется.
 
 `projectSourceRepos` — список helm-репозиториев (plain URL-строки), попадающих в AppProject `spec.sourceRepos`. Необходим для Applications на native `source.helm`, зависящих от helm-репозиториев: без записи в `sourceRepos` ArgoCD откажет в доступе к репо. К `repoUrl` stage добавляются все URLs из списка (с дедупликацией). Не путать с `sourceRepos` — последний задаёт git-репозитории (`{url, branch, path}`) для bootstrap-Applications и в AppProject не попадает.
+
+`orphanedResources` — попадает в `spec.orphanedResources` AppProject ([orphaned resources monitoring](https://argo-cd.readthedocs.io/en/stable/user-guide/orphaned-resources/)): `warn` — предупреждать о ресурсах в namespaces проекта, не принадлежащих ни одному Application; `ignore` — исключения (`group`/`kind`/`name`, `name` поддерживает glob). Orphaned-ресурсы видны в UI ArgoCD и удаляются из него вручную — рендер их не трогает. ⚠️ Мониторинг нагружает ArgoCD: не включайте `warn` для проектов с высоконагруженными namespaces (kube-system и т.п.); можно начать с `warn: false` (ресурсы видны в UI без предупреждений).
 
 ### app.yaml (приложение)
 
@@ -387,6 +405,56 @@ project: default
 syncWave: "-10"
 ```
 
+#### Гибридный режим: raw-манифесты (manifests/)
+
+Приложение может состоять из helm-части, raw-части или обеих сразу. Состав определяется структурой, без флагов:
+
+- `chartName` в app.yaml → helm-часть (чарт из `charts/`, values, secrets values);
+- папка `manifests/` в каталоге приложения → raw-часть (обычные YAML-манифесты, как `kubectl apply -f`);
+- обе → комбинированное приложение.
+
+```
+projects/production/apps/external-service/
+├── app.yaml          # namespace, syncWave, encryptKinds — общие для обеих частей
+├── manifests/        # raw-манифесты
+│   ├── crd.yaml
+│   └── secrets.yaml  # SOPS-зашифрованный Secret (см. ниже)
+```
+
+Только raw (chartName не указывается):
+```yaml
+# app.yaml
+namespace: production
+```
+
+Helm + raw вместе:
+```yaml
+# app.yaml
+chartName: universal-helm-chart
+namespace: production
+```
+
+Как рендерится каждая часть:
+
+| Режим | Default mode | Full-render |
+|-------|--------------|-------------|
+| только helm | Application с `source.helm` | `helm template` → `rendered/<stage>/apps/<app>/` (directory source) |
+| только raw | Application с directory source на `projects/.../manifests` | манифесты копируются в `rendered/<stage>/apps/<app>/<kind>/` (directory source) |
+| helm + raw | multi-source Application (`sources`: helm + directory) | обе части льются в один выходной каталог, один directory-source Application |
+
+Правила и ограничения:
+
+- **Коллизии запрещены**: если helm-рендер и raw-манифест определяют один объект (одинаковые kind + name) — ошибка рендера. Один объект должен иметь один источник истины.
+- Namespaces указываются в самих манифестах; `namespace` из app.yaml используется как `destination.namespace` Application (fallback для ресурсов без явного namespace).
+- `--set` и `values.yaml` действуют только на helm-часть; raw-манифесты не шаблонизируются.
+- `syncWave`, `ignoreDifferences`, `application` (кастомизация syncPolicy) из app.yaml применяются к Application целиком, независимо от состава.
+
+**SOPS в raw-манифестах.** Secret-манифест в `manifests/` можно хранить SOPS-зашифрованным (поле `sops:` в YAML):
+
+- full-render: зашифрованные доки дешифруются, раскладываются по `<kind>/`, затем перешифровываются ( тот же цикл, что и для helm-секретов; `encryptKinds` из app.yaml, по умолчанию `secret`);
+- default mode: для raw-приложения с секретами генерируется Application с `plugin: {name: sops}` на `projects/.../manifests` — CMP-sidecar дешифрует на лету;
+- шифрование: `argocd-render --encrypt projects/production/apps/myapp/manifests/` (шифрует `secrets*` в указанной папке).
+
 #### Кастомизация Application CR
 
 Секция `application` в app.yaml позволяет управлять параметрами генерируемого Application CR. Все параметры опциональны — если не указаны, используются дефолты.
@@ -412,6 +480,7 @@ application:
 | приложение (`apps/`) | `true` | устаревшие ресурсы очищаются при обновлениях релиза |
 | rbac | `true` | аккумулируется из всех файлов, синхронизация должна сходиться |
 | networkpolicy | `true` | устаревшие политики должны удаляться |
+| kyverno | `true` | устаревшие политики должны удаляться |
 | repo bootstrap | `false` | хардкод, не должен пруниться |
 
 Остальные дефолты:
@@ -463,6 +532,9 @@ projects/<stage>/
 │   ├── app.yaml          ← кастомизация syncPolicy
 │   ├── deny-all.yaml
 │   └── deny-all-rvc1.yaml
+├── kyverno/
+│   ├── app.yaml          ← кастомизация syncPolicy
+│   └── require-labels.yaml
 ├── rbac/
 │   ├── app.yaml          ← кастомизация syncPolicy
 │   └── ...
@@ -499,7 +571,7 @@ syncOptions:
 
 | Параметр | По умолчанию |
 |----------|-------------|
-| `prune` | `false` для namespaces, `true` для rbac/networkpolicy |
+| `prune` | `false` для namespaces, `true` для rbac/networkpolicy/kyverno |
 | `selfHeal` | `true` |
 | `syncOptions` | `["ServerSideApply=true", "RespectIgnoreDifferences=true"]` |
 | `finalizers` | `["resources-finalizer.argocd.argoproj.io"]` |
@@ -552,23 +624,44 @@ serviceAccounts:
             kind: ClusterRole
 ```
 
-AppProject:
+Kyverno-политики (`projects/<stage>/kyverno/*.yaml`, отдельное Application `<stage>-kyverno`, syncWave 3):
 ```yaml
-project:
-  name: production
-  namespace: argocd-system
-  description: Production environment
-  sourceRepos:
-    - "*"
-  destinations:
-    - namespace: "*"
-      server: "*"
-  namespaceResourceWhitelist:
-    - group: "apps"
-      kind: "Deployment"
-    - group: ""
-      kind: "ConfigMap"
+clusterPolicies:                     # ClusterPolicy — кластерные
+  require-labels:
+    spec:
+      validationFailureAction: Enforce
+      rules:
+        - name: require-team-label
+          match:
+            any:
+              - resources:
+                  kinds: ["Pod"]
+          validate:
+            message: "Label 'team' is required"
+            pattern:
+              metadata:
+                labels:
+                  team: "?*"
+
+policies:                            # Policy — namespaced
+  restrict-image-pull:
+    namespace: production            # default: "default"
+    spec:
+      validationFailureAction: Audit
+      rules:
+        - name: allowed-registries
+          match:
+            any:
+              - resources:
+                  kinds: ["Pod"]
+          validate:
+            pattern:
+              spec:
+                containers:
+                  - image: "registry.example.com/*"
 ```
+
+AppProject: поля AppProject (`sourceRepos`, `destinations`, `orphanedResources`, whitelist/blacklist и т.д.) через values чарта **не задаются** — AppProject генерирует `argocd-render` из `main.yaml` stage (см. [main.yaml](#main-yaml-stage)).
 
 ## Makefile
 

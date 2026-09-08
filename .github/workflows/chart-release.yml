@@ -1,0 +1,148 @@
+name: Release Chart
+
+# Standard chart-releaser flow: releases are driven by pushes to master.
+# cr detects which chart version in Chart.yaml changed since the last
+# release, packages the chart, creates the <chart>-<version> tag and a
+# GitHub Release, and publishes the repository index to the gh-pages
+# branch. No external v* tags are required — binary releases (release.yml)
+# and chart releases are fully independent.
+#
+# The chart lives in tools/kubernetes-resources (not charts/), so
+# charts_dir points at tools/ — chart-releaser packages every subdir with
+# a Chart.yaml, and kubernetes-resources is currently the only one.
+#
+# The gh-pages branch is created automatically (empty orphan branch via
+# git commit-tree, without switching the working tree), and README.md from
+# the repository root is synced to gh-pages, where it becomes the site
+# index page. GitHub Pages itself must be enabled once manually:
+# Settings -> Pages -> Deploy from a branch -> gh-pages / (root).
+on:
+  # Manual run from the Actions UI ("Run workflow").
+  # chart-releaser publishes a new release only when the chart version in
+  # Chart.yaml changed since the last release; the gh-pages steps (branch,
+  # Pages, README sync) run unconditionally.
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: chart-release
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: helm lint (default values)
+        run: helm lint tools/kubernetes-resources
+
+      - name: helm lint (ci/ values per mode)
+        run: |
+          if compglob=$(compgen -G "tools/kubernetes-resources/ci/*.yaml") && [ -n "$compglob" ]; then
+            for f in tools/kubernetes-resources/ci/*.yaml; do
+              echo "::group::helm lint $(basename "${f}")"
+              helm lint tools/kubernetes-resources -f "${f}"
+              echo "::endgroup::"
+            done
+          fi
+
+      - name: helm template renders without error
+        run: |
+          helm template kubernetes-resources tools/kubernetes-resources >/dev/null
+          if compglob=$(compgen -G "tools/kubernetes-resources/ci/*.yaml") && [ -n "$compglob" ]; then
+            for f in tools/kubernetes-resources/ci/*.yaml; do
+              echo "::group::helm template $(basename "${f}")"
+              helm template kubernetes-resources tools/kubernetes-resources -f "${f}" >/dev/null
+              echo "::endgroup::"
+            done
+          fi
+
+  release:
+    needs: lint
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Ensure gh-pages branch exists
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "gh-pages branch already exists"
+          else
+            # Empty commit on top of the empty tree, without switching the
+            # working tree: tools/ stays in place for chart-releaser.
+            EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+            COMMIT=$(git commit-tree "$EMPTY_TREE" -m "Initialize gh-pages branch")
+            git push origin "$COMMIT:refs/heads/gh-pages"
+            echo "gh-pages branch created"
+          fi
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: tools
+          # Chart files may change without a version bump (docs, license,
+          # etc.) - do not fail when the release for this version already
+          # exists; publish happens on the next version bump instead.
+          skip_existing: true
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Sync README.md from master to gh-pages
+        run: |
+          git fetch origin '+refs/heads/gh-pages:refs/remotes/origin/gh-pages' '+refs/heads/master:refs/remotes/origin/master'
+          git checkout -f -B gh-pages origin/gh-pages
+          git show origin/master:README.md > README.md
+          # Override the default GitHub Pages (Primer) theme layout to drop
+          # the "This site is open source. Improve this page." footer.
+          mkdir -p _layouts
+          cat > _layouts/default.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en-US">
+            <head>
+              <meta charset="UTF-8">
+              <meta http-equiv="X-UA-Compatible" content="IE=edge">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+
+              {% seo %}
+
+              <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+            </head>
+            <body>
+              <div class="container-lg px-3 my-5 markdown-body">
+                <h1><a href="{{ '/' | relative_url }}">{{ site.title | default: site.github.repository_name }}</a></h1>
+
+                {{ content }}
+
+              </div>
+              <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+              <script>anchors.add();</script>
+            </body>
+          </html>
+          EOF
+          git add README.md _layouts/default.html
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync README.md from master"
+            git push origin gh-pages
+            echo "README.md pushed to gh-pages"
+          else
+            echo "README.md on gh-pages is up to date"
+          fi

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  # Manual run from the Actions UI ("Run workflow")
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches-ignore:
+      - gh-pages
+
+jobs:
+  lint-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: helm lint (default values)
+        run: helm lint tools/kubernetes-resources
+
+      - name: helm lint (ci/ values per mode)
+        run: |
+          if compglob=$(compgen -G "tools/kubernetes-resources/ci/*.yaml") && [ -n "$compglob" ]; then
+            for f in tools/kubernetes-resources/ci/*.yaml; do
+              echo "::group::helm lint $(basename "${f}")"
+              helm lint tools/kubernetes-resources -f "${f}"
+              echo "::endgroup::"
+            done
+          fi
+
+      - name: helm template renders without error
+        run: |
+          helm template kubernetes-resources tools/kubernetes-resources >/dev/null
+          if compglob=$(compgen -G "tools/kubernetes-resources/ci/*.yaml") && [ -n "$compglob" ]; then
+            for f in tools/kubernetes-resources/ci/*.yaml; do
+              echo "::group::helm template $(basename "${f}")"
+              helm template kubernetes-resources tools/kubernetes-resources -f "${f}" >/dev/null
+              echo "::endgroup::"
+            done
+          fi
+
+  build-go:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          # helm-repo-sync is a separate go module; disable the default
+          # go.sum cache key so setup-go doesn't fail when the module under
+          # tools/ has no lockfile matching the root.
+          cache: false
+
+      - name: Build and vet (argocd-render)
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Build and vet (helm-repo-sync)
+        working-directory: tools/cmp-sops/helm-repo-sync
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Shell syntax check (sops-generate.sh)
+        run: sh -n tools/cmp-sops/sops-generate.sh

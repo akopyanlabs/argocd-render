@@ -1,0 +1,26 @@
+{{- if or .Values.clusterPolicies .Values.policies }}
+{{- range $name, $cp := .Values.clusterPolicies }}
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ $name | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+{{ toYaml $cp.spec | indent 2 }}
+{{- end }}
+
+{{- range $name, $p := .Values.policies }}
+---
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: {{ $name | quote }}
+  namespace: {{ $p.namespace | default "default" | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+{{ toYaml $p.spec | indent 2 }}
+{{- end }}
+{{- end }}

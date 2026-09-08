@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.0
+
+### Added
+- **Гибридный режим**: приложение может состоять из helm-чарта (`chartName`), raw-манифестов (`manifests/`) или обеих частей сразу. Состав определяется структурой, без флагов. Default mode: raw-only → directory-source Application на `projects/.../manifests`; helm+raw → multi-source Application (`sources`: helm + directory). Full-render: обе части льются в `rendered/<stage>/apps/<app>/<kind>/` (один directory-source Application). Коллизия одинаковых kind+name между helm-рендером и manifests/ — ошибка рендера
+- **SOPS в raw-манифестах**: SOPS-зашифрованные Secret-манифесты в `manifests/` дешифруются при рендере и перешифровываются в full-render (тот же цикл, что у helm-секретов); в default mode генерируется Application с `plugin: {name: sops}` на `manifests/`
+- **Kyverno-политики в чарте kubernetes-resources**: секции `clusterPolicies` (ClusterPolicy) и `policies` (namespaced Policy) из новой директории `projects/<stage>/kyverno/`. Отдельное Application `<stage>-kyverno` (syncWave 3, после networkpolicy, до приложений), prune по умолчанию true, кастомизация через `kyverno/app.yaml`
+- **Orphaned resources мониторинг**: ключ `orphanedResources` (`warn`, `ignore`) в `main.yaml` stage → `spec.orphanedResources` AppProject
+- CMP sidecar (`sops-generate.sh`): комбинированные приложения (app.yaml + manifests/) — raw-манифесты дописываются в вывод после helm-рендера, зашифрованные дешифруются через `sops -d`
+
+### Changed
+- Chart kubernetes-resources: version 0.2.0 → 0.3.0 (шаблоны kyverno.yaml, project.yaml + orphanedResources)
+- kubernetes-resources: ClusterRole рендерится с префиксом имени `cr-<name>` — ключ в секции `clusterRoles` задаётся без префикса (миграция: убрать префикс из ключей `clusterRoles`, ссылки в `users`/`groups`/`serviceAccounts` остаются с `cr-`)
+- Skip-сообщение рендера приложений: `chart not found` → `no chart and no manifests/` (приложение без chartName и manifests/ пропускается)
+- README: секция values для AppProject переписана — `project:`-обёртка в values никогда не работала (AppProject генерируется из main.yaml); добавлена документация гибридного режима, kyverno, orphanedResources
+
 ## v0.4.4
 
 ### Added

@@ -249,6 +249,20 @@ $1"
         -n "$NAMESPACE" \
         --include-crds
 
+    # Hybrid apps (argocd-render layout): append raw manifests after the helm
+    # output. SOPS-encrypted docs are decrypted, plain ones pass through.
+    if [ -f "app.yaml" ] && [ -d manifests ]; then
+        log "appending raw manifests/"
+        find manifests -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | sort | while IFS= read -r f; do
+            if grep -q '^sops:' "$f" 2>/dev/null; then
+                sops -d --input-type yaml --output-type yaml "$f"
+            else
+                cat "$f"
+            fi
+            echo "---"
+        done
+    fi
+
 else
     # ============================================================
     # FULL-RENDER MODE: decrypt SOPS-encrypted files only (no helm)
