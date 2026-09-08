@@ -628,8 +628,14 @@ Kyverno-политики (`projects/<stage>/kyvernopolicy/*.yaml`, отдель�
 ```yaml
 clusterPolicies:                     # ClusterPolicy — кластерные
   require-labels:
+    annotations:                     # опционально (policies.kyverno.io/*)
+      policies.kyverno.io/title: Require Labels
+      policies.kyverno.io/severity: medium
+    labels:                          # опционально
+      team: platform
     spec:
       validationFailureAction: Enforce
+      background: true
       rules:
         - name: require-team-label
           match:
@@ -660,6 +666,13 @@ policies:                            # Policy — namespaced
                 containers:
                   - image: "registry.example.com/*"
 ```
+
+Best practices (GitOps policy-as-code с ArgoCD + Kyverno):
+
+- **Начинайте с `validationFailureAction: Audit`** и наблюдайте нарушения, затем повышайте до `Enforce` обычным коммитом. В Audit-режиме нарушения видны в PolicyReport: `kubectl get policyreport -A`, `kubectl describe clusterpolicyreport <name>`.
+- Аннотации `policies.kyverno.io/*` (`title`, `category`, `severity`, `description`) попадают в PolicyReport и `kubectl describe` — заполняйте их, политики перестают быть «безликими».
+- Если сам Kyverno деплоится через argocd-render — задайте ему syncWave ниже 3 (через `app.yaml`), чтобы он установился раньше своих политик.
+- Готовый пример политики: `restrict-external-ips` (блокировка `Service.spec.externalIPs`, MITM-вектор CVE-2020-8554) — в `values.yaml` чарта.
 
 AppProject: поля AppProject (`sourceRepos`, `destinations`, `orphanedResources`, whitelist/blacklist и т.д.) через values чарта **не задаются** — AppProject генерирует `argocd-render` из `main.yaml` stage (см. [main.yaml](#main-yaml-stage)).
 
