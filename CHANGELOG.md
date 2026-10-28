@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.2
+
+### Added
+- Цветной вывод в терминале: зелёный — успешные операции (Rendered/Application/Created/Encrypted/Decrypted/Done), красный — ошибки (ERROR/FAILED), жёлтый — предупреждения и пропуски (WARNING/SKIP/Skip/Removed). Цвета включаются только для интерактивного терминала: пайпы, редиректы и CI получают чистый текст; отключение — `NO_COLOR=1` или `TERM=dumb`
+
+### Fixed
+- rbac-Application (default-режим): `helm.parameters` (`argocdStage`/`argocdNamespace`) добавлялись безусловно — у проектов без ArgoCD RBAC (ни одного `argocd: true`) в Application появлялись неиспользуемые параметры. Теперь параметры (и инжект values в full-render) добавляются только при фактическом использовании ArgoCD RBAC
+
 ## v0.6.1
 
 ### Changed

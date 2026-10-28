@@ -50,6 +50,49 @@ var (
 	kubernetesResourcesChart = "kubernetes-resources"
 )
 
+// --- Terminal colors (plain output for pipes/CI, opt-out via NO_COLOR) ---
+
+const (
+	ansiReset  = "\033[0m"
+	ansiRed    = "\033[31m"
+	ansiGreen  = "\033[32m"
+	ansiYellow = "\033[33m"
+)
+
+var (
+	colorStdout = detectColor(os.Stdout)
+	colorStderr = detectColor(os.Stderr)
+)
+
+// detectColor reports whether the stream is an interactive terminal and the
+// user hasn't opted out (NO_COLOR, TERM=dumb). Redirected output and CI logs
+// stay plain so ANSI escapes don't pollute them.
+func detectColor(f *os.File) bool {
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func paint(enabled bool, color, s string) string {
+	if !enabled {
+		return s
+	}
+	return color + s + ansiReset
+}
+
+func green(s string) string     { return paint(colorStdout, ansiGreen, s) }
+func yellow(s string) string    { return paint(colorStdout, ansiYellow, s) }
+func redErr(s string) string    { return paint(colorStderr, ansiRed, s) }
+func yellowErr(s string) string { return paint(colorStderr, ansiYellow, s) }
+
 type encryptedEntry struct {
 	ciphertext string
 	data       map[string]interface{}
@@ -129,9 +172,9 @@ func validateConfig(stageMeta map[string]interface{}) {
 
 	if len(missing) > 0 {
 		if _, err := os.Stat(configFile); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "ERROR: %s not found\n", configFile)
+			fmt.Fprintf(os.Stderr, redErr("ERROR")+": %s not found\n", configFile)
 		} else {
-			fmt.Fprintf(os.Stderr, "ERROR: %s missing required fields:\n", configFile)
+			fmt.Fprintf(os.Stderr, redErr("ERROR")+": %s missing required fields:\n", configFile)
 			for _, k := range missing {
 				fmt.Fprintf(os.Stderr, "  - %s\n", k)
 			}
@@ -367,7 +410,7 @@ func encryptSOPSSecrets(outputDir string, kinds []string, saved map[string]encry
 					var newData map[string]interface{}
 					if err := yaml.Unmarshal(newPlain, &newData); err == nil && deepEqualMap(newData, entry.data) {
 						if err := os.WriteFile(fp, []byte(entry.ciphertext), 0644); err != nil {
-							fmt.Fprintf(os.Stderr, "  WARNING restore encrypted %s: %v\n", e.Name(), err)
+							fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" restore encrypted %s: %v\n", e.Name(), err)
 						}
 						continue
 					}
@@ -376,11 +419,11 @@ func encryptSOPSSecrets(outputDir string, kinds []string, saved map[string]encry
 			cmd := exec.Command("sops", "-e", "--input-type", "yaml", "--output-type", "yaml", fp)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  WARNING sops encrypt %s: %s\n", e.Name(), strings.TrimSpace(string(out)))
+				fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" sops encrypt %s: %s\n", e.Name(), strings.TrimSpace(string(out)))
 				continue
 			}
 			if err := os.WriteFile(fp, out, 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "  WARNING write encrypted %s: %v\n", e.Name(), err)
+				fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" write encrypted %s: %v\n", e.Name(), err)
 			}
 		}
 	}
@@ -542,6 +585,26 @@ func loadInfraAppConfig(infraDir string) map[string]interface{} {
 	return map[string]interface{}{"application": data}
 }
 
+// hasArgocdRBAC reports whether any user or group in the aggregated rbac
+// values carries the argocd: true marker — i.e. the ArgoCD RBAC operator
+// templates will render something and need argocdStage/argocdNamespace.
+func hasArgocdRBAC(rbacValues map[string]interface{}) bool {
+	for _, key := range []string{"users", "groups"} {
+		entries, ok := rbacValues[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, v := range entries {
+			if m, ok := v.(map[string]interface{}); ok {
+				if b, ok := m["argocd"].(bool); ok && b {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func discoverInfraFiles(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -637,7 +700,7 @@ func renderProject(stageDir, stageName string, stageMeta map[string]interface{})
 	projOutDir := filepath.Join(repoRoot, "rendered", "argocd", "projects")
 	os.MkdirAll(projOutDir, 0755)
 	if _, err := helmTemplateToDir(chartDir, "project", ns, projValues, projOutDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR render project: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render project: %v\n", err)
 		return false
 	}
 
@@ -664,7 +727,7 @@ func renderProject(stageDir, stageName string, stageMeta map[string]interface{})
 		data, _ := os.ReadFile(projFile)
 		os.RemoveAll(filepath.Dir(projFile))
 		if err := os.WriteFile(targetPath, data, 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING write project %s: %v\n", stageName, err)
+			fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" write project %s: %v\n", stageName, err)
 		}
 	}
 
@@ -672,7 +735,7 @@ func renderProject(stageDir, stageName string, stageMeta map[string]interface{})
 	// (deployed out-of-band by ansible, pointing at rendered/argocd/projects) rolls
 	// out all AppProjects, so generating a *-project.yaml Application per stage
 	// would duplicate that responsibility.
-	fmt.Printf("  Rendered project (%d destinations)\n", len(destinations))
+	fmt.Printf("  "+green("Rendered")+" project (%d destinations)\n", len(destinations))
 	return true
 }
 
@@ -722,7 +785,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 		outDir := filepath.Join(outputBase, "namespaces", nsName)
 		os.RemoveAll(outDir)
 		if _, err := helmTemplateToDir(chartDir, nsName, nsName, values, outDir); err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR render namespace %s: %v\n", nsName, err)
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render namespace %s: %v\n", nsName, err)
 			continue
 		}
 		appName := stageName + "-namespace-" + nsName
@@ -744,7 +807,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Rendered infra: namespace/%s\n", nsName)
+		fmt.Printf("  "+green("Rendered")+" infra: namespace/%s\n", nsName)
 	}
 
 	// Cleanup stale namespace dirs
@@ -753,7 +816,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 		for _, e := range entries {
 			if e.IsDir() && !active["namespace-"+e.Name()] {
 				os.RemoveAll(filepath.Join(nsOutPath, e.Name()))
-				fmt.Printf("  Removed: namespaces/%s\n", e.Name())
+				fmt.Printf("  "+yellow("Removed")+": namespaces/%s\n", e.Name())
 			}
 		}
 	}
@@ -772,16 +835,18 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			// ArgoCD RBAC operator CRs ride the same values: stage prefix
 			// isolates identical role names between stages, namespace must
 			// match where the AppProjects live (argocd.root-namespace).
-			argocdNS := getCfgString("argocd", "root-namespace")
-			if argocdNS == "" {
-				argocdNS = "argocd-system"
+			if hasArgocdRBAC(rbacValues) {
+				argocdNS := getCfgString("argocd", "root-namespace")
+				if argocdNS == "" {
+					argocdNS = "argocd-system"
+				}
+				rbacValues["argocdStage"] = stageName
+				rbacValues["argocdNamespace"] = argocdNS
 			}
-			rbacValues["argocdStage"] = stageName
-			rbacValues["argocdNamespace"] = argocdNS
 			outDir := filepath.Join(outputBase, "rbac")
 			os.RemoveAll(outDir)
 			if _, err := helmTemplateToDir(chartDir, "rbac", "default", rbacValues, outDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR render rbac: %v\n", err)
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render rbac: %v\n", err)
 			} else {
 				appName := stageName + "-rbac"
 				active["rbac"] = true
@@ -802,7 +867,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 				}
-				fmt.Printf("  Rendered infra: rbac (%d files)\n", len(rbacFiles))
+				fmt.Printf("  "+green("Rendered")+" infra: rbac (%d files)\n", len(rbacFiles))
 			}
 		}
 	}
@@ -821,7 +886,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			outDir := filepath.Join(outputBase, "networkpolicy")
 			os.RemoveAll(outDir)
 			if _, err := helmTemplateToDir(chartDir, "networkpolicy", "default", npValues, outDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR render networkpolicy: %v\n", err)
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render networkpolicy: %v\n", err)
 			} else {
 				appName := stageName + "-networkpolicy"
 				active["networkpolicy"] = true
@@ -842,7 +907,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 				}
-				fmt.Printf("  Rendered infra: networkpolicy (%d files)\n", len(npFiles))
+				fmt.Printf("  "+green("Rendered")+" infra: networkpolicy (%d files)\n", len(npFiles))
 			}
 		}
 	}
@@ -860,7 +925,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			outDir := filepath.Join(outputBase, "kyvernopolicy")
 			os.RemoveAll(outDir)
 			if _, err := helmTemplateToDir(chartDir, "kyvernopolicy", "default", kyValues, outDir); err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR render kyvernopolicy: %v\n", err)
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render kyvernopolicy: %v\n", err)
 			} else {
 				appName := stageName + "-kyvernopolicy"
 				active["kyvernopolicy"] = true
@@ -884,7 +949,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
 					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 				}
-				fmt.Printf("  Rendered infra: kyvernopolicy (%d files)\n", len(kyFiles))
+				fmt.Printf("  "+green("Rendered")+" infra: kyvernopolicy (%d files)\n", len(kyFiles))
 			}
 		}
 	}
@@ -954,7 +1019,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			applyAppSettings(app, nsConfig, &pruneFalse)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Application: namespace/%s (helm)\n", nsName)
+		fmt.Printf("  "+green("Application")+": namespace/%s (helm)\n", nsName)
 	}
 
 	// 3. RBAC (aggregated valueFiles)
@@ -964,12 +1029,6 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 	if len(rbacFiles) > 0 {
 		appName := stageName + "-rbac"
 		active["rbac"] = true
-
-		// ArgoCD RBAC operator CRs ride the same values (see full-render).
-		argocdNS := getCfgString("argocd", "root-namespace")
-		if argocdNS == "" {
-			argocdNS = "argocd-system"
-		}
 
 		chartDirAbs := filepath.Join(chartsDir, kubernetesResourcesChart)
 		chartValues := chartValuesFile(chartDirAbs)
@@ -1005,16 +1064,28 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 				}
 			}
 		}
+		// ArgoCD RBAC operator CRs ride the same values (see full-render);
+		// parameters only when the feature is actually in use.
 		if app != nil {
-			spec, _ := app["spec"].(map[string]interface{})
-			if spec != nil {
-				source, _ := spec["source"].(map[string]interface{})
-				if source != nil {
-					helm, _ := source["helm"].(map[string]interface{})
-					if helm != nil {
-						helm["parameters"] = []interface{}{
-							map[string]interface{}{"name": "argocdStage", "value": stageName},
-							map[string]interface{}{"name": "argocdNamespace", "value": argocdNS},
+			aggregated := make(map[string]interface{})
+			for _, f := range rbacFiles {
+				aggregated = deepMerge(aggregated, loadYAML(f))
+			}
+			if hasArgocdRBAC(aggregated) {
+				argocdNS := getCfgString("argocd", "root-namespace")
+				if argocdNS == "" {
+					argocdNS = "argocd-system"
+				}
+				spec, _ := app["spec"].(map[string]interface{})
+				if spec != nil {
+					source, _ := spec["source"].(map[string]interface{})
+					if source != nil {
+						helm, _ := source["helm"].(map[string]interface{})
+						if helm != nil {
+							helm["parameters"] = []interface{}{
+								map[string]interface{}{"name": "argocdStage", "value": stageName},
+								map[string]interface{}{"name": "argocdNamespace", "value": argocdNS},
+							}
 						}
 					}
 				}
@@ -1022,7 +1093,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			applyAppSettings(app, rbacConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Application: rbac (helm, %d files)\n", len(rbacFiles))
+		fmt.Printf("  "+green("Application")+": rbac (helm, %d files)\n", len(rbacFiles))
 	}
 
 	// 4. NetworkPolicy (aggregated valueFiles)
@@ -1071,7 +1142,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			applyAppSettings(app, npConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Application: networkpolicy (helm, %d files)\n", len(npFiles))
+		fmt.Printf("  "+green("Application")+": networkpolicy (helm, %d files)\n", len(npFiles))
 	}
 
 	// 5. Kyverno (syncWave: 3, aggregated valueFiles)
@@ -1123,7 +1194,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			applyAppSettings(app, kyConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
-		fmt.Printf("  Application: kyvernopolicy (helm, %d files)\n", len(kyFiles))
+		fmt.Printf("  "+green("Application")+": kyvernopolicy (helm, %d files)\n", len(kyFiles))
 	}
 
 	return active
@@ -1192,11 +1263,11 @@ func helmDepBuild(chartDir string) bool {
 	cmd.Env = helmEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR helm dep build %s: %s\n", filepath.Base(chartDir), strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" helm dep build %s: %s\n", filepath.Base(chartDir), strings.TrimSpace(string(out)))
 		return false
 	}
 	if err := os.WriteFile(hashFile, []byte(currentHash), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "  WARNING write dep cache %s: %v\n", filepath.Base(chartDir), err)
+		fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" write dep cache %s: %v\n", filepath.Base(chartDir), err)
 	}
 	return true
 }
@@ -1248,7 +1319,7 @@ func prepareDeps(chartDirs []string) bool {
 	}
 	wg.Wait()
 	if len(failed) > 0 {
-		fmt.Fprintf(os.Stderr, "  FAILED: %s\n", strings.Join(failed, ", "))
+		fmt.Fprintf(os.Stderr, "  "+redErr("FAILED")+": %s\n", strings.Join(failed, ", "))
 		return false
 	}
 	return true
@@ -1270,31 +1341,31 @@ func cmdClean() {
 		chartsSub := filepath.Join(chartDir, "charts")
 		if _, err := os.Stat(chartsSub); err == nil {
 			if err := os.RemoveAll(chartsSub); err != nil {
-				fmt.Fprintf(os.Stderr, "  WARNING remove %s/charts: %v\n", filepath.Base(chartDir), err)
+				fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" remove %s/charts: %v\n", filepath.Base(chartDir), err)
 			} else {
-				fmt.Printf("  Removed: %s/charts/\n", filepath.Base(chartDir))
+				fmt.Printf("  "+yellow("Removed")+": %s/charts/\n", filepath.Base(chartDir))
 			}
 		}
 		// Chart.lock and .dep.md5
 		for _, name := range []string{"Chart.lock", ".dep.md5"} {
 			if err := os.Remove(filepath.Join(chartDir, name)); err == nil {
-				fmt.Printf("  Removed: %s/%s\n", filepath.Base(chartDir), name)
+				fmt.Printf("  "+yellow("Removed")+": %s/%s\n", filepath.Base(chartDir), name)
 			}
 		}
 	}
 	// Global render cache (helm cache/config/data + any stray state)
 	if info, err := os.Stat(cacheDir); err == nil && info.IsDir() {
 		if err := os.RemoveAll(cacheDir); err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING remove %s: %v\n", cacheDir, err)
+			fmt.Fprintf(os.Stderr, "  "+yellowErr("WARNING")+" remove %s: %v\n", cacheDir, err)
 		} else {
 			rel, _ := filepath.Rel(repoRoot, cacheDir)
-			fmt.Printf("  Removed: %s/\n", rel)
+			fmt.Printf("  "+yellow("Removed")+": %s/\n", rel)
 		}
 	}
 	if len(chartDirs) == 0 {
 		fmt.Println("  No charts found")
 	}
-	fmt.Println("Done.")
+	fmt.Println(green("Done."))
 }
 
 // --- Rendering ---
@@ -1372,7 +1443,7 @@ func writeDocs(data []byte, outputDir string, conflict map[string]bool) ([]strin
 		os.MkdirAll(kindDir, 0755)
 		outFile := filepath.Join(kindDir, name+".yaml")
 		if err := writeYAML(outFile, doc); err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR writing %s: %v\n", outFile, err)
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" writing %s: %v\n", outFile, err)
 			continue
 		}
 		written = append(written, outFile)
@@ -1485,7 +1556,7 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 			hasSOPS = true
 			secrets, err := decryptSOPS(secretsFile)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR decrypt %s: %v\n", secretsFile, err)
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" decrypt %s: %v\n", secretsFile, err)
 				return "error", instanceName, nil
 			}
 			values = deepMerge(values, secrets)
@@ -1523,7 +1594,7 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 
 	if chartName != "" {
 		if _, err := helmTemplateToDir(chartDir, instanceName, namespace, values, appOutput); err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR render %s: %v\n", instanceName, err)
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render %s: %v\n", instanceName, err)
 			return "error", instanceName, nil
 		}
 	}
@@ -1533,14 +1604,14 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 		for _, mf := range manifests {
 			data, err := os.ReadFile(mf)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  ERROR read %s: %v\n", mf, err)
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" read %s: %v\n", mf, err)
 				return "error", instanceName, nil
 			}
 			content := string(data)
 			if isSOPSEncrypted(mf) {
 				plain, err := decryptContent(content)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  ERROR decrypt manifest %s: %v\n", mf, err)
+					fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" decrypt manifest %s: %v\n", mf, err)
 					return "error", instanceName, nil
 				}
 				content = plain
@@ -1552,7 +1623,7 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 			buf.WriteString("---\n")
 		}
 		if _, err := writeDocs(buf.Bytes(), appOutput, writtenObjects(appOutput)); err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR render %s: %v\n", instanceName, err)
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render %s: %v\n", instanceName, err)
 			return "error", instanceName, nil
 		}
 	}
@@ -1604,7 +1675,7 @@ func generateAppApplication(appMeta map[string]interface{}, stageMeta map[string
 		"namespace": namespace,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR generate app application: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate app application: %v\n", err)
 		return nil
 	}
 
@@ -1661,7 +1732,7 @@ func generateAppApplicationHelm(appMeta map[string]interface{}, stageMeta map[st
 		"namespace":    namespace,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR generate helm application: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate helm application: %v\n", err)
 		return nil
 	}
 
@@ -1717,7 +1788,7 @@ func generateMixedApplication(appMeta map[string]interface{}, stageMeta map[stri
 		"namespace":      namespace,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR generate mixed application: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate mixed application: %v\n", err)
 		return nil
 	}
 
@@ -1760,7 +1831,7 @@ func generateSOPSApplication(appMeta map[string]interface{}, stageMeta map[strin
 		"namespace": namespace,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR generate sops application: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate sops application: %v\n", err)
 		return nil
 	}
 
@@ -1824,7 +1895,7 @@ func generateRepoApplication(stageName string, stageMeta map[string]interface{},
 		"metadata_namespace": projectNS,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ERROR generate repo application: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate repo application: %v\n", err)
 		return nil
 	}
 	applyAppSettings(app, map[string]interface{}{
@@ -1963,11 +2034,11 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 			for _, r := range results {
 				switch r.status {
 				case "rendered":
-					fmt.Printf("  Rendered app: %s\n", r.name)
+					fmt.Printf("  "+green("Rendered")+" app: %s\n", r.name)
 				case "skip":
-					fmt.Printf("  SKIP %s: no chart and no manifests/\n", r.name)
+					fmt.Printf("  "+yellow("SKIP")+" %s: no chart and no manifests/\n", r.name)
 				case "error":
-					fmt.Fprintf(os.Stderr, "  ERROR rendering %s\n", r.name)
+					fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" rendering %s\n", r.name)
 				}
 			}
 		} else {
@@ -1997,7 +2068,7 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 			for _, e := range entries {
 				if e.IsDir() && !activeApps[e.Name()] {
 					os.RemoveAll(filepath.Join(renderedAppsPath, e.Name()))
-					fmt.Printf("  Removed: applications/%s\n", e.Name())
+					fmt.Printf("  "+yellow("Removed")+": applications/%s\n", e.Name())
 				}
 			}
 		}
@@ -2015,7 +2086,7 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 		// DEFAULT MODE (only Application CRs)
 		if _, err := os.Stat(outputBase); err == nil {
 			os.RemoveAll(outputBase)
-			fmt.Printf("  Removed: rendered/%s/\n", stageName)
+			fmt.Printf("  "+yellow("Removed")+": rendered/%s/\n", stageName)
 		}
 
 		fmt.Println("  Generating Applications...")
@@ -2027,12 +2098,12 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 			manifests := manifestYAMLFiles(ad)
 			chartName, _ := appMetaFile["chartName"].(string)
 			if chartName == "" && len(manifests) == 0 {
-				fmt.Printf("  SKIP %s: no chart and no manifests/\n", instanceName)
+				fmt.Printf("  "+yellow("SKIP")+" %s: no chart and no manifests/\n", instanceName)
 				continue
 			}
 			if chartName != "" {
 				if _, err := os.Stat(filepath.Join(chartsDir, chartName)); os.IsNotExist(err) {
-					fmt.Printf("  SKIP %s: chart not found\n", instanceName)
+					fmt.Printf("  "+yellow("SKIP")+" %s: chart not found\n", instanceName)
 					continue
 				}
 			}
@@ -2096,7 +2167,7 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 			if appYAML != nil {
 				writeYAML(filepath.Join(argocdAppsDir, stageName+"-"+instanceName+".yaml"), appYAML)
 			}
-			fmt.Printf("  Application: %s (%s)\n", instanceName, mode)
+			fmt.Printf("  "+green("Application")+": %s (%s)\n", instanceName, mode)
 		}
 
 		// Repos
@@ -2156,7 +2227,7 @@ func cleanupStaleApps(argocdAppsDir, stageName string, activeApps, activeRepos m
 		stem := strings.TrimSuffix(e.Name(), ".yaml")
 		if !keep[stem] {
 			os.Remove(filepath.Join(argocdAppsDir, e.Name()))
-			fmt.Printf("  Removed: applications/%s\n", e.Name())
+			fmt.Printf("  "+yellow("Removed")+": applications/%s\n", e.Name())
 		}
 	}
 }
@@ -2167,12 +2238,12 @@ func cmdInit(stageName string) {
 	fmt.Println("Initializing GitOps repository structure...")
 	initData, err := embeddedFS.ReadFile("templates/init-repository.yaml")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: init template not found: %v\n", err)
+		fmt.Fprintf(os.Stderr, redErr("ERROR")+": init template not found: %v\n", err)
 		os.Exit(1)
 	}
 	var initTemplate map[string]interface{}
 	if err := yaml.Unmarshal(initData, &initTemplate); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: parse init template: %v\n", err)
+		fmt.Fprintf(os.Stderr, redErr("ERROR")+": parse init template: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -2190,7 +2261,7 @@ func cmdInit(stageName string) {
 		}
 		os.MkdirAll(path, 0755)
 		rel, _ := filepath.Rel(repoRoot, path)
-		fmt.Printf("  Created: %s/\n", rel)
+		fmt.Printf("  "+green("Created")+": %s/\n", rel)
 	}
 
 	gitignorePath := filepath.Join(repoRoot, ".gitignore")
@@ -2200,10 +2271,10 @@ func cmdInit(stageName string) {
 	} else {
 		gitignore, _ := initTemplate["gitignore"].(string)
 		if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR write .gitignore: %v\n", err)
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" write .gitignore: %v\n", err)
 		}
 		rel, _ := filepath.Rel(repoRoot, gitignorePath)
-		fmt.Printf("  Created: %s\n", rel)
+		fmt.Printf("  "+green("Created")+": %s\n", rel)
 	}
 
 	// Always create example stage
@@ -2215,7 +2286,7 @@ func cmdInit(stageName string) {
 		createStage(initTemplate, s)
 	}
 
-	fmt.Println("\nDone. Next steps:")
+	fmt.Println("\n" + green("Done.") + " Next steps:")
 	steps, _ := initTemplate["nextSteps"].([]interface{})
 	for i, s := range steps {
 		step, _ := s.(string)
@@ -2251,7 +2322,7 @@ func cmdInitConfig() bool {
 		return false
 	}
 	rel, _ := filepath.Rel(repoRoot, configPath)
-	fmt.Printf("  Created: %s\n", rel)
+	fmt.Printf("  "+green("Created")+": %s\n", rel)
 	fmt.Printf("  --> Edit with your ArgoCD settings\n")
 	return true
 }
@@ -2275,7 +2346,7 @@ func createStage(initTemplate map[string]interface{}, stageName string) {
 		}
 		os.MkdirAll(path, 0755)
 		rel, _ := filepath.Rel(repoRoot, path)
-		fmt.Printf("  Created: %s/\n", rel)
+		fmt.Printf("  "+green("Created")+": %s/\n", rel)
 	}
 
 	stageFile := yamlPath(filepath.Join(stageDir, "main"))
@@ -2287,7 +2358,7 @@ func createStage(initTemplate map[string]interface{}, stageName string) {
 		if stageYAML != nil {
 			writeYAML(stageFile, stageYAML)
 			rel, _ := filepath.Rel(repoRoot, stageFile)
-			fmt.Printf("  Created: %s\n", rel)
+			fmt.Printf("  "+green("Created")+": %s\n", rel)
 			fmt.Printf("  --> Edit %s with your repo URL\n", rel)
 		}
 	}
@@ -2352,16 +2423,16 @@ func cmdEncrypt(path string) {
 		found = true
 		rel, _ := filepath.Rel(repoRoot, f)
 		if isSOPSEncrypted(f) {
-			fmt.Printf("  Skip (already encrypted): %s\n", rel)
+			fmt.Printf("  "+yellow("Skip")+" (already encrypted): %s\n", rel)
 			continue
 		}
 		cmd := exec.Command("sops", "-e", "-i", "--input-type", "yaml", "--output-type", "yaml", f)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR %s: %s\n", rel, strings.TrimSpace(string(out)))
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" %s: %s\n", rel, strings.TrimSpace(string(out)))
 			continue
 		}
-		fmt.Printf("  Encrypted: %s\n", rel)
+		fmt.Printf("  "+green("Encrypted")+": %s\n", rel)
 	}
 	if !found {
 		fmt.Println("  No secrets* files found")
@@ -2378,16 +2449,16 @@ func cmdDecrypt(path string) {
 		found = true
 		rel, _ := filepath.Rel(repoRoot, f)
 		if !isSOPSEncrypted(f) {
-			fmt.Printf("  Skip (not encrypted): %s\n", rel)
+			fmt.Printf("  "+yellow("Skip")+" (not encrypted): %s\n", rel)
 			continue
 		}
 		cmd := exec.Command("sops", "-d", "-i", "--input-type", "yaml", "--output-type", "yaml", f)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ERROR %s: %s\n", rel, strings.TrimSpace(string(out)))
+			fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" %s: %s\n", rel, strings.TrimSpace(string(out)))
 			continue
 		}
-		fmt.Printf("  Decrypted: %s\n", rel)
+		fmt.Printf("  "+green("Decrypted")+": %s\n", rel)
 	}
 	if !found {
 		fmt.Println("  No secrets* files found")
@@ -2626,7 +2697,7 @@ func main() {
 				}
 				if !activeStageNames[e.Name()] {
 					os.RemoveAll(filepath.Join(renderedDir, e.Name()))
-					fmt.Printf("  Removed: rendered/%s/\n", e.Name())
+					fmt.Printf("  "+yellow("Removed")+": rendered/%s/\n", e.Name())
 				}
 			}
 		}
@@ -2644,7 +2715,7 @@ func main() {
 				}
 				if !matched {
 					os.Remove(filepath.Join(appsDir, e.Name()))
-					fmt.Printf("  Removed: applications/%s\n", e.Name())
+					fmt.Printf("  "+yellow("Removed")+": applications/%s\n", e.Name())
 				}
 			}
 		}
@@ -2666,13 +2737,13 @@ func main() {
 				stageName := strings.TrimSuffix(e.Name(), ".yaml")
 				if !activeStageNames[stageName] || (rootProject != "" && stageName == rootProject) {
 					os.Remove(filepath.Join(projectsDir, e.Name()))
-					fmt.Printf("  Removed: projects/%s\n", e.Name())
+					fmt.Printf("  "+yellow("Removed")+": projects/%s\n", e.Name())
 				}
 			}
 		}
 	}
 
-	fmt.Println("\nDone.")
+	fmt.Println("\n" + green("Done."))
 }
 
 // multiString implements flag.Value for repeated --set flags
