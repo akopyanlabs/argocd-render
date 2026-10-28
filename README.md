@@ -618,7 +618,7 @@ groups:
       - cluster-admin
 ```
 
-ArgoCD RBAC — единое место для доступов kube-api и ArgoCD ([argocd-rbac-operator](https://github.com/argoproj-labs/argocd-rbac-operator)). Маркер `argocd: true` у пользователя/группы включает генерацию CR оператора; CR создаются в namespace AppProjects (`argocd.root-namespace`), имена ролей префиксуются именем stage:
+ArgoCD RBAC — единое место для доступов kube-api и ArgoCD ([argocd-rbac-operator](https://github.com/argoproj-labs/argocd-rbac-operator)). Ключ `argocdRoles` у пользователя/группы (скаляр или список) включает генерацию CR оператора — отдельный маркер не нужен; CR создаются в namespace AppProjects (`argocd.root-namespace`), имена ролей префиксуются именем stage:
 
 ```yaml
 # Библиотека ролей для ГРУПП: ArgoCDProjectRole + ArgoCDProjectRoleBinding.
@@ -645,16 +645,13 @@ argocdUserRoles:
 
 users:
   alice:
-    argocd: true                     # ← маркер
-    argocdRoles: [production-viewer] # из argocdUserRoles
+    argocdRoles: production-viewer   # или список; из argocdUserRoles
     clusterRoles: [...]              # kube-api — как обычно
 
 groups:
   devs:
-    argocd: true                     # ← маркер
-    argocdProjects:
-      - project: production          # AppProject (= имя stage)
-        role: developer              # из argocdProjectRoles
+    argocdRoles: developer           # или список; из argocdProjectRoles;
+                                     # AppProject берётся автоматически = имя stage
     clusterRoles: [...]
 ```
 
