@@ -2,6 +2,14 @@ apiVersion: v1
 entries:
   kubernetes-resources:
   - apiVersion: v2
+    created: "2026-10-28T13:44:45.185817032Z"
+    digest: d8e992353377d2cdb9da60a32d4673ddd9cdf1e3df7241b09d96928bc82529b5
+    name: kubernetes-resources
+    type: application
+    urls:
+    - https://github.com/akopyanlabs/argocd-render/releases/download/kubernetes-resources-0.6.0/kubernetes-resources-0.6.0.tgz
+    version: 0.6.0
+  - apiVersion: v2
     created: "2026-10-28T13:31:25.44819135Z"
     digest: 67ab66f83d41246c46d93d610c88318eaa2beffe7921ca2e89d33ffc770e0dd5
     name: kubernetes-resources
@@ -25,4 +33,4 @@ entries:
     urls:
     - https://github.com/akopyanlabs/argocd-render/releases/download/kubernetes-resources-0.3.0/kubernetes-resources-0.3.0.tgz
     version: 0.3.0
-generated: "2026-10-28T13:31:25.448205647Z"
+generated: "2026-10-28T13:44:45.185840967Z"
