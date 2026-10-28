@@ -24,6 +24,8 @@
 
 # users:
 #   dev:
+#     argocd: true                      # маркер: генерировать ArgoCD RBAC (см. argocdUserRoles)
+#     argocdRoles: [production-viewer]  # глобальные ArgoCD-роли (ArgoCDRole + Binding)
 #     clusterRoles:
 #       - cr-list-namespaces
 #     namespaces:
@@ -34,8 +36,58 @@
 
 # groups:
 #   admins:
+#     argocd: true                      # маркер: генерировать ArgoCD RBAC (см. argocdProjectRoles)
+#     argocdProjects:
+#       - project: production           # AppProject (= имя stage), role из argocdProjectRoles
+#         role: developer
 #     clusterRoles:
 #       - cluster-admin
+
+# Типовые ArgoCDProjectRole — встроены в чарт, доступны в каждом проекте
+# без локального определения; локальная секция с тем же именем переопределяет
+# встроенную (rules заменяются целиком), удалить встроенную нельзя.
+argocdProjectRoles:
+  viewer:
+    description: Read-only приложений проекта
+    rules:
+      - resource: applications
+        verbs: [get, list, watch]
+        objects: ["*"]
+  developer:
+    description: Read-only внутри проекта (приложения + репозитории)
+    rules:
+      - resource: applications
+        verbs: [get, list, watch]
+        objects: ["*"]
+      - resource: repositories
+        verbs: [get]
+        objects: ["*"]
+  admin:
+    description: Полный контроль приложений проекта
+    rules:
+      - resource: applications
+        verbs: [get, list, watch, create, update, delete, sync, override]
+        objects: ["*"]
+      - resource: repositories
+        verbs: ["*"]
+        objects: ["*"]
+
+# argocdProjectRoles:                   # Дополнительные/переопределяемые роли проекта
+#   release-manager:
+#     description: Деплой без удаления
+#     rules:
+#       - resource: applications
+#         verbs: [get, list, watch, sync]
+#         objects: ["*"]
+
+# argocdUserRoles:                      # ArgoCDRole — для ПОЛЬЗОВАТЕЛЕЙ с argocd: true.
+#                                       # Глобальными быть не могут (objects содержат имя
+#                                       # проекта), определяются в каждом проекте.
+#   production-viewer:
+#     rules:
+#       - resource: applications
+#         verbs: [get, list, watch]
+#         objects: ["production/*"]
 
 # serviceAccounts:
 #   ci-deployer:
@@ -120,7 +172,7 @@
 #               spec:
 #                 =(externalIPs): "null"
 
-# policies:                               # Kyverno Policy (namespaced)
+# kyvernoPolicies:                       # Kyverno Policy (namespaced)
 #   restrict-image-pull:
 #     namespace: production               # default: "default"
 #     annotations:

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.0
+
+### Added
+- **ArgoCD RBAC через [argocd-rbac-operator](https://github.com/argoproj-labs/argocd-rbac-operator)**: доступы kube-api и ArgoCD определяются в одном месте — в `projects/<stage>/rbac/*.yaml`. Маркер `argocd: true` у пользователя/группы включает генерацию CR оператора:
+  - `argocdProjectRoles` (библиотека ролей для групп) → ArgoCDProjectRole + ArgoCDProjectRoleBinding с агрегированными субъектами (`appProjectRef` + `groups`); доступ строго внутри AppProject. Типовые роли **встроены в чарт** и доступны во всех проектах без определения: `viewer` (read-only приложений), `developer` (read-only приложений + репозиториев), `admin` (полный контроль в пределах проекта); локальная секция с тем же именем переопределяет встроенную (rules заменяются целиком)
+  - `argocdUserRoles` (библиотека ролей для пользователей) → ArgoCDRole + ArgoCDRoleBinding (subject `kind: sso`); правила глобальные, objects явно с проектом (`<project>/*`)
+  - группы привязываются к проектам через `argocdProjects: [{project, role}]`, пользователи — через `argocdRoles: [имена]`
+  - CR создаются в `argocd.root-namespace` (где живут AppProjects), имена ролей префиксуются именем stage — одинаковые роли разных stage не конфликтуют
+  - fail-closed: ссылка на несуществующую роль — ошибка рендера; роль без субъектов не рендерится
+  - оба режима: full-render инжектит `argocdStage`/`argocdNamespace` в values, default-режим передаёт их через `helm.parameters` rbac-Application
+
+### Changed
+- Chart kubernetes-resources: version 0.4.0 → 0.5.0 (новый шаблон argocd-rbac.yaml)
+- **Breaking**: секция values `policies` (namespaced Kyverno Policy) переименована в `kyvernoPolicies` — симметрично `clusterPolicies`, имя `policies` было слишком общим. Миграция: переименовать ключ в `projects/<stage>/kyvernopolicy/*.yaml`
+- README: секция RBAC в values исправлена — обёртка `rbac:` не работала (чарт читает плоские `users`/`groups`/`clusterRoles`)
+
 ## v0.5.3
 
 ### Added

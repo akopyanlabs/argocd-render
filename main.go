@@ -769,6 +769,15 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 			rbacValues = deepMerge(rbacValues, data)
 		}
 		if len(rbacValues) > 0 {
+			// ArgoCD RBAC operator CRs ride the same values: stage prefix
+			// isolates identical role names between stages, namespace must
+			// match where the AppProjects live (argocd.root-namespace).
+			argocdNS := getCfgString("argocd", "root-namespace")
+			if argocdNS == "" {
+				argocdNS = "argocd-system"
+			}
+			rbacValues["argocdStage"] = stageName
+			rbacValues["argocdNamespace"] = argocdNS
 			outDir := filepath.Join(outputBase, "rbac")
 			os.RemoveAll(outDir)
 			if _, err := helmTemplateToDir(chartDir, "rbac", "default", rbacValues, outDir); err != nil {
@@ -956,6 +965,12 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 		appName := stageName + "-rbac"
 		active["rbac"] = true
 
+		// ArgoCD RBAC operator CRs ride the same values (see full-render).
+		argocdNS := getCfgString("argocd", "root-namespace")
+		if argocdNS == "" {
+			argocdNS = "argocd-system"
+		}
+
 		chartDirAbs := filepath.Join(chartsDir, kubernetesResourcesChart)
 		chartValues := chartValuesFile(chartDirAbs)
 		var relPaths []string
@@ -991,6 +1006,19 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			}
 		}
 		if app != nil {
+			spec, _ := app["spec"].(map[string]interface{})
+			if spec != nil {
+				source, _ := spec["source"].(map[string]interface{})
+				if source != nil {
+					helm, _ := source["helm"].(map[string]interface{})
+					if helm != nil {
+						helm["parameters"] = []interface{}{
+							map[string]interface{}{"name": "argocdStage", "value": stageName},
+							map[string]interface{}{"name": "argocdNamespace", "value": argocdNS},
+						}
+					}
+				}
+			}
 			applyAppSettings(app, rbacConfig, nil)
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}

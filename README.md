@@ -589,19 +589,72 @@ namespace:
     memory: "16Gi"
 ```
 
-RBAC:
+RBAC (плоские секции `users`/`groups`/`clusterRoles`; вместе с kube-api доступами здесь же задаются доступы ArgoCD — см. ниже):
 ```yaml
-rbac:
-  groups:
-    - name: devs
-      clusterRoles:
-        - cr-list-namespaces
-      namespaces:
-        - name: production
-          roles:
-            - name: view
-              kind: ClusterRole
+clusterRoles:
+  list-namespaces:
+    rules:
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get", "list"]
+
+users:
+  dev:
+    clusterRoles:
+      - cr-list-namespaces
+    namespaces:
+      - name: production
+        roles:
+          - name: view
+            kind: ClusterRole
+
+groups:
+  admins:
+    clusterRoles:
+      - cluster-admin
 ```
+
+ArgoCD RBAC — единое место для доступов kube-api и ArgoCD ([argocd-rbac-operator](https://github.com/argoproj-labs/argocd-rbac-operator)). Маркер `argocd: true` у пользователя/группы включает генерацию CR оператора; CR создаются в namespace AppProjects (`argocd.root-namespace`), имена ролей префиксуются именем stage:
+
+```yaml
+# Библиотека ролей для ГРУПП: ArgoCDProjectRole + ArgoCDProjectRoleBinding.
+# Доступ строго внутри AppProject: "*" = в пределах проекта.
+# Типовые роли (viewer / developer / admin) встроены в чарт — доступны везде
+# без определения; локальная секция с тем же именем переопределяет встроенную.
+argocdProjectRoles:
+  release-manager:                    # дополнительная роль проекта (опционально)
+    description: Деплой без удаления
+    rules:
+      - resource: applications
+        verbs: [get, list, watch, sync]
+        objects: ["*"]
+
+# Библиотека ролей для ПОЛЬЗОВАТЕЛЕЙ: ArgoCDRole + ArgoCDRoleBinding (subject kind: sso).
+# Правила глобальные: objects явно с проектом ("<project>/*"); голый "*" = весь кластер.
+# Глобальными быть не могут (objects содержат имя проекта) — определяются в каждом проекте.
+argocdUserRoles:
+  production-viewer:
+    rules:
+      - resource: applications
+        verbs: [get, list, watch]
+        objects: ["production/*"]
+
+users:
+  alice:
+    argocd: true                     # ← маркер
+    argocdRoles: [production-viewer] # из argocdUserRoles
+    clusterRoles: [...]              # kube-api — как обычно
+
+groups:
+  devs:
+    argocd: true                     # ← маркер
+    argocdProjects:
+      - project: production          # AppProject (= имя stage)
+        role: developer              # из argocdProjectRoles
+    clusterRoles: [...]
+```
+
+Требования и поведение: оператор установлен в кластере; root-AppProject должен разрешать rbac-Application деплой в root-namespace (CR несут явный `metadata.namespace`); ссылка на несуществующую роль — ошибка рендера (fail-closed); роль без субъектов не рендерится; оба режима (default/full-render) поддерживаются (в default-режиме stage/namespace передаются через `helm.parameters`).
 
 ServiceAccount (объект SA создаётся автоматически из любой записи в `serviceAccounts`; `clusterRoles`/`namespaces` генерируют bindings):
 ```yaml
@@ -649,7 +702,7 @@ clusterPolicies:                     # ClusterPolicy — кластерные
                 labels:
                   team: "?*"
 
-policies:                            # Policy — namespaced
+kyvernoPolicies:                     # Policy — namespaced
   restrict-image-pull:
     namespace: production            # default: "default"
     spec:

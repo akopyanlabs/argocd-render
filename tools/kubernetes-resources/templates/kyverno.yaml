@@ -1,4 +1,4 @@
-{{- if or .Values.clusterPolicies .Values.policies }}
+{{- if or .Values.clusterPolicies .Values.kyvernoPolicies }}
 {{- range $name, $cp := .Values.clusterPolicies }}
 ---
 apiVersion: kyverno.io/v1
@@ -18,7 +18,7 @@ spec:
 {{ toYaml $cp.spec | indent 2 }}
 {{- end }}
 
-{{- range $name, $p := .Values.policies }}
+{{- range $name, $p := .Values.kyvernoPolicies }}
 ---
 apiVersion: kyverno.io/v1
 kind: Policy

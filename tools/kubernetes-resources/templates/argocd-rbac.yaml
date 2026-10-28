@@ -1,0 +1,122 @@
+{{- if or .Values.argocdProjectRoles .Values.argocdUserRoles }}
+{{- /* ArgoCD RBAC (argocd-rbac-operator): kube-api RBAC and ArgoCD access
+       are defined in one place — groups/users entries with the `argocd: true`
+       marker. argocdStage/argocdNamespace are injected by argocd-render:
+       the stage prefix keeps identical role names from different stages
+       apart, the namespace must match where the AppProjects live. */ -}}
+{{- $ns := .Values.argocdNamespace | default "argocd-system" }}
+{{- $prfx := "" }}
+{{- with .Values.argocdStage }}{{ $prfx = printf "%s-" . }}{{ end }}
+
+{{- /* Groups → ArgoCDProjectRole, aggregated by role, then by project. */ -}}
+{{- $byRole := dict }}
+{{- range $gname, $g := .Values.groups }}
+{{- if and $g.argocd $g.argocdProjects }}
+{{- range $ap := $g.argocdProjects }}
+{{- $projGroups := dict }}
+{{- if hasKey $byRole $ap.role }}{{ $projGroups = index $byRole $ap.role }}{{ end }}
+{{- $gl := list }}
+{{- if hasKey $projGroups $ap.project }}{{ $gl = index $projGroups $ap.project }}{{ end }}
+{{- $gl = append $gl $gname }}
+{{- $_ := set $projGroups $ap.project $gl }}
+{{- $_ := set $byRole $ap.role $projGroups }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Users → ArgoCDRole, aggregated by role. */ -}}
+{{- $usersByRole := dict }}
+{{- range $uname, $u := .Values.users }}
+{{- if and $u.argocd $u.argocdRoles }}
+{{- range $rname := $u.argocdRoles }}
+{{- $ul := list }}
+{{- if hasKey $usersByRole $rname }}{{ $ul = index $usersByRole $rname }}{{ end }}
+{{- $ul = append $ul $uname }}
+{{- $_ := set $usersByRole $rname $ul }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* Fail-closed: a referenced role must exist in the library — a typo'd
+       name would silently grant nothing. */ -}}
+{{- range $rname, $_ := $byRole }}
+{{- if not (hasKey $.Values.argocdProjectRoles $rname) }}
+{{- fail (printf "groups reference undefined argocdProjectRole %q (defined: %v)" $rname (keys $.Values.argocdProjectRoles | sortAlpha | join ", ")) }}
+{{- end }}
+{{- end }}
+{{- range $rname, $_ := $usersByRole }}
+{{- if not (hasKey $.Values.argocdUserRoles $rname) }}
+{{- fail (printf "users reference undefined argocdUserRole %q (defined: %v)" $rname (keys $.Values.argocdUserRoles | sortAlpha | join ", ")) }}
+{{- end }}
+{{- end }}
+
+{{- range $rname, $r := .Values.argocdProjectRoles }}
+{{- $projGroups := dict }}
+{{- if hasKey $byRole $rname }}{{ $projGroups = index $byRole $rname }}{{ end }}
+{{- if $projGroups }}
+---
+apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
+kind: ArgoCDProjectRole
+metadata:
+  name: {{ $prfx }}{{ $rname }}
+  namespace: {{ $ns | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+  description: {{ $r.description | default "" | quote }}
+  rules:
+{{ toYaml $r.rules | indent 2 }}
+---
+apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
+kind: ArgoCDProjectRoleBinding
+metadata:
+  name: {{ $prfx }}{{ $rname }}
+  namespace: {{ $ns | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+  argocdProjectRoleRef:
+    name: {{ $prfx }}{{ $rname }}
+  subjects:
+{{- range $prj, $gl := $projGroups }}
+    - appProjectRef: {{ $prj | quote }}
+      groups:
+{{ toYaml $gl | indent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- range $rname, $r := .Values.argocdUserRoles }}
+{{- $ul := list }}
+{{- if hasKey $usersByRole $rname }}{{ $ul = index $usersByRole $rname }}{{ end }}
+{{- if $ul }}
+---
+apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
+kind: ArgoCDRole
+metadata:
+  name: {{ $prfx }}{{ $rname }}
+  namespace: {{ $ns | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+  rules:
+{{ toYaml $r.rules | indent 2 }}
+---
+apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
+kind: ArgoCDRoleBinding
+metadata:
+  name: {{ $prfx }}{{ $rname }}
+  namespace: {{ $ns | quote }}
+  labels:
+    app.kubernetes.io/managed-by: argocd-render
+spec:
+  argocdRoleRef:
+    name: {{ $prfx }}{{ $rname }}
+  subjects:
+{{- range $ul }}
+    - kind: sso
+      name: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
