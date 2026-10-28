@@ -128,7 +128,7 @@ argocdProjectRoles:
 #       ingress:
 #         - action: Deny
 
-# clusterPolicies:                        # Kyverno ClusterPolicy (кластерные)
+# kyvernoClusterPolicies:               # Kyverno ClusterPolicy (кластерные)
 #   require-labels:
 #     annotations:                        # опционально (policies.kyverno.io/*)
 #       policies.kyverno.io/title: Require Labels

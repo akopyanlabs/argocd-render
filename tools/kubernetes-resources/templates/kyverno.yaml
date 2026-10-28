@@ -1,5 +1,5 @@
-{{- if or .Values.clusterPolicies .Values.kyvernoPolicies }}
-{{- range $name, $cp := .Values.clusterPolicies }}
+{{- if or .Values.kyvernoClusterPolicies .Values.kyvernoPolicies }}
+{{- range $name, $cp := .Values.kyvernoClusterPolicies }}
 ---
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy

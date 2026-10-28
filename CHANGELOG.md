@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.1
+
+### Changed
+- **Breaking**: секция values `clusterPolicies` переименована в `kyvernoClusterPolicies` — симметрично `kyvernoPolicies` (v0.6.0). Миграция: переименовать ключ в `projects/<stage>/kyvernopolicy/*.yaml`. Старый ключ молча игнорируется
+- Chart kubernetes-resources: version 0.5.0 → 0.6.0
+
 ## v0.6.0
 
 ### Added
