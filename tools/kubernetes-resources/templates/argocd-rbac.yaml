@@ -1,25 +1,33 @@
+{{- /* subjectRoles normalizes the argocdRoles field (string or list) to a
+       comma-separated string (include can only return strings; the consumer
+       splits it back and drops empty entries). */ -}}
+{{- define "argocdRBAC.subjectRoles" }}
+{{- $roles := list }}
+{{- if kindIs "string" . }}{{ $roles = list . }}
+{{- else if kindIs "slice" . }}{{ $roles = . }}{{ end }}
+{{- if $roles }}{{ join "," $roles }}{{ end }}
+{{- end }}
+
 {{- if or .Values.argocdProjectRoles .Values.argocdUserRoles }}
 {{- /* ArgoCD RBAC (argocd-rbac-operator): kube-api RBAC and ArgoCD access
-       are defined in one place — groups/users entries with the `argocd: true`
-       marker. argocdStage/argocdNamespace are injected by argocd-render:
-       the stage prefix keeps identical role names from different stages
-       apart, the namespace must match where the AppProjects live. */ -}}
+       are defined in one place — a group/user entry with `argocdRoles`.
+       Groups get an ArgoCDProjectRole bound to THIS stage's AppProject
+       (argocdStage = AppProject name, injected by argocd-render); users get
+       a global ArgoCDRole (objects carry the project scope explicitly). */ -}}
 {{- $ns := .Values.argocdNamespace | default "argocd-system" }}
+{{- $stage := .Values.argocdStage | default "" }}
 {{- $prfx := "" }}
-{{- with .Values.argocdStage }}{{ $prfx = printf "%s-" . }}{{ end }}
+{{- with $stage }}{{ $prfx = printf "%s-" . }}{{ end }}
 
-{{- /* Groups → ArgoCDProjectRole, aggregated by role, then by project. */ -}}
-{{- $byRole := dict }}
+{{- /* Groups → ArgoCDProjectRole, aggregated by role. */ -}}
+{{- $groupsByRole := dict }}
 {{- range $gname, $g := .Values.groups }}
-{{- if and $g.argocd $g.argocdProjects }}
-{{- range $ap := $g.argocdProjects }}
-{{- $projGroups := dict }}
-{{- if hasKey $byRole $ap.role }}{{ $projGroups = index $byRole $ap.role }}{{ end }}
+{{- range $role := include "argocdRBAC.subjectRoles" $g.argocdRoles | splitList "," }}
+{{- if $role }}
 {{- $gl := list }}
-{{- if hasKey $projGroups $ap.project }}{{ $gl = index $projGroups $ap.project }}{{ end }}
+{{- if hasKey $groupsByRole $role }}{{ $gl = index $groupsByRole $role }}{{ end }}
 {{- $gl = append $gl $gname }}
-{{- $_ := set $projGroups $ap.project $gl }}
-{{- $_ := set $byRole $ap.role $projGroups }}
+{{- $_ := set $groupsByRole $role $gl }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -27,21 +35,26 @@
 {{- /* Users → ArgoCDRole, aggregated by role. */ -}}
 {{- $usersByRole := dict }}
 {{- range $uname, $u := .Values.users }}
-{{- if and $u.argocd $u.argocdRoles }}
-{{- range $rname := $u.argocdRoles }}
+{{- range $role := include "argocdRBAC.subjectRoles" $u.argocdRoles | splitList "," }}
+{{- if $role }}
 {{- $ul := list }}
-{{- if hasKey $usersByRole $rname }}{{ $ul = index $usersByRole $rname }}{{ end }}
+{{- if hasKey $usersByRole $role }}{{ $ul = index $usersByRole $role }}{{ end }}
 {{- $ul = append $ul $uname }}
-{{- $_ := set $usersByRole $rname $ul }}
+{{- $_ := set $usersByRole $role $ul }}
 {{- end }}
 {{- end }}
 {{- end }}
 
 {{- /* Fail-closed: a referenced role must exist in the library — a typo'd
        name would silently grant nothing. */ -}}
-{{- range $rname, $_ := $byRole }}
+{{- range $rname, $_ := $groupsByRole }}
 {{- if not (hasKey $.Values.argocdProjectRoles $rname) }}
 {{- fail (printf "groups reference undefined argocdProjectRole %q (defined: %v)" $rname (keys $.Values.argocdProjectRoles | sortAlpha | join ", ")) }}
+{{- end }}
+{{- end }}
+{{- if $groupsByRole }}
+{{- if not $stage }}
+{{- fail "groups with argocdRoles require argocdStage (AppProject name) — render via argocd-render, it injects the stage automatically" }}
 {{- end }}
 {{- end }}
 {{- range $rname, $_ := $usersByRole }}
@@ -51,9 +64,8 @@
 {{- end }}
 
 {{- range $rname, $r := .Values.argocdProjectRoles }}
-{{- $projGroups := dict }}
-{{- if hasKey $byRole $rname }}{{ $projGroups = index $byRole $rname }}{{ end }}
-{{- if $projGroups }}
+{{- if hasKey $groupsByRole $rname }}
+{{- $gl := index $groupsByRole $rname }}
 ---
 apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
 kind: ArgoCDProjectRole
@@ -78,18 +90,15 @@ spec:
   argocdProjectRoleRef:
     name: {{ $prfx }}{{ $rname }}
   subjects:
-{{- range $prj, $gl := $projGroups }}
-    - appProjectRef: {{ $prj | quote }}
+    - appProjectRef: {{ $stage | quote }}
       groups:
 {{ toYaml $gl | indent 6 }}
 {{- end }}
 {{- end }}
-{{- end }}
 
 {{- range $rname, $r := .Values.argocdUserRoles }}
-{{- $ul := list }}
-{{- if hasKey $usersByRole $rname }}{{ $ul = index $usersByRole $rname }}{{ end }}
-{{- if $ul }}
+{{- if hasKey $usersByRole $rname }}
+{{- $ul := index $usersByRole $rname }}
 ---
 apiVersion: rbac-operator.argoproj-labs.io/v1alpha1
 kind: ArgoCDRole

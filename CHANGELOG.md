@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0
+
+### Changed
+- **Breaking**: упрощён контракт ArgoCD RBAC — маркер `argocd: true` и `argocdProjects: [{project, role}]` удалены. Теперь и для пользователей, и для групп — единый ключ `argocdRoles` (скаляр или список); для групп AppProject подставляется автоматически из имени stage (было: явный `project:`). Миграция: `argocd: true` + `argocdProjects: [{project: <stage>, role: X}]` → `argocdRoles: X`
+
 ## v0.6.2
 
 ### Added

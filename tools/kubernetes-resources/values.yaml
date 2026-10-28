@@ -24,8 +24,8 @@
 
 # users:
 #   dev:
-#     argocd: true                      # маркер: генерировать ArgoCD RBAC (см. argocdUserRoles)
-#     argocdRoles: [production-viewer]  # глобальные ArgoCD-роли (ArgoCDRole + Binding)
+#     argocdRoles: production-viewer    # или список [a, b] — глобальные ArgoCD-роли
+#                                        # (ArgoCDRole + Binding, библиотека argocdUserRoles)
 #     clusterRoles:
 #       - cr-list-namespaces
 #     namespaces:
@@ -36,10 +36,9 @@
 
 # groups:
 #   admins:
-#     argocd: true                      # маркер: генерировать ArgoCD RBAC (см. argocdProjectRoles)
-#     argocdProjects:
-#       - project: production           # AppProject (= имя stage), role из argocdProjectRoles
-#         role: developer
+#     argocdRoles: admin                # или список — роли в AppProject ЭТОГО stage
+#                                        # (ArgoCDProjectRole + Binding, библиотека
+#                                        # argocdProjectRoles; проект = имя stage)
 #     clusterRoles:
 #       - cluster-admin
 

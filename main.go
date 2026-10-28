@@ -586,8 +586,8 @@ func loadInfraAppConfig(infraDir string) map[string]interface{} {
 }
 
 // hasArgocdRBAC reports whether any user or group in the aggregated rbac
-// values carries the argocd: true marker — i.e. the ArgoCD RBAC operator
-// templates will render something and need argocdStage/argocdNamespace.
+// values carries argocdRoles (string or list) — i.e. the ArgoCD RBAC
+// operator templates will render something and need argocdStage/argocdNamespace.
 func hasArgocdRBAC(rbacValues map[string]interface{}) bool {
 	for _, key := range []string{"users", "groups"} {
 		entries, ok := rbacValues[key].(map[string]interface{})
@@ -595,8 +595,17 @@ func hasArgocdRBAC(rbacValues map[string]interface{}) bool {
 			continue
 		}
 		for _, v := range entries {
-			if m, ok := v.(map[string]interface{}); ok {
-				if b, ok := m["argocd"].(bool); ok && b {
+			m, ok := v.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch roles := m["argocdRoles"].(type) {
+			case string:
+				if roles != "" {
+					return true
+				}
+			case []interface{}:
+				if len(roles) > 0 {
 					return true
 				}
 			}
