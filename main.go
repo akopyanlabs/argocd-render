@@ -968,16 +968,17 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 	//     one Application per file);
 	//   - manifests/ — raw YAML applied as-is (one Application for the bundle,
 	//     SOPS-encrypted docs supported, no chart needed).
+	// Namespace chain: values file "namespace" → app.yaml "namespace" → default.
 	// The dir-level app.yaml carries syncPolicy overrides for all of them.
 	smDir := filepath.Join(stageDir, "servicemesh")
 	smConfig := loadInfraAppConfig(smDir)
 	smFiles := discoverInfraFiles(smDir)
 	smManifests := manifestYAMLFiles(smDir)
 	if len(smFiles) > 0 || len(smManifests) > 0 {
-		if smChart := func() string {
-			s, _ := loadYAML(yamlPath(filepath.Join(smDir, "app")))["chartName"].(string)
-			return s
-		}(); len(smFiles) > 0 && smChart == "" {
+		smApp := loadYAML(yamlPath(filepath.Join(smDir, "app")))
+		smChart, _ := smApp["chartName"].(string)
+		smDefaultNS, _ := smApp["namespace"].(string)
+		if len(smFiles) > 0 && smChart == "" {
 			fmt.Println("  " + yellow("SKIP") + " servicemesh: no chartName in servicemesh/app.yaml (values files ignored)")
 		} else {
 			smChartDir := filepath.Join(chartsDir, smChart)
@@ -991,6 +992,9 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 						continue
 					}
 					ns, _ := values["namespace"].(string)
+					if ns == "" {
+						ns = smDefaultNS
+					}
 					if ns == "" {
 						ns = "default"
 					}
@@ -1063,6 +1067,10 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 				}
 				appName := stageName + "-servicemesh-manifests"
 				active["servicemesh-manifests"] = true
+				smNS := smDefaultNS
+				if smNS == "" {
+					smNS = "default"
+				}
 				app, _ := renderTemplate("application.yaml", map[string]string{
 					"name":      appName,
 					"sync_wave": "4",
@@ -1073,7 +1081,7 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 					"branch":    branch,
 					"path":      "rendered/" + stageName + "/servicemesh/manifests",
 					"server":    server,
-					"namespace": "default",
+					"namespace": smNS,
 				})
 				if app != nil && hasSOPS {
 					removeNestedKey(app, "spec", "source", "directory")
@@ -1346,13 +1354,16 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 	// 6. ServiceMesh (syncWave: 4). Flat <svc>.yaml — helm values Applications
 	// (chart via app.yaml chartName); manifests/ — one raw bundle Application
 	// (directory source, plugin sops when encrypted docs present).
+	// Namespace chain: values file "namespace" → app.yaml "namespace" → default.
 	smDir := filepath.Join(stageDir, "servicemesh")
 	smConfig := loadInfraAppConfig(smDir)
 	smFiles := discoverInfraFiles(smDir)
 	smManifests := manifestYAMLFiles(smDir)
 	smHasSecrets := hasEncryptedManifest(smManifests)
+	smApp := loadYAML(yamlPath(filepath.Join(smDir, "app")))
+	smDefaultNS, _ := smApp["namespace"].(string)
 	if len(smFiles) > 0 {
-		smChart, _ := loadYAML(yamlPath(filepath.Join(smDir, "app")))["chartName"].(string)
+		smChart, _ := smApp["chartName"].(string)
 		if smChart == "" {
 			fmt.Println("  " + yellow("SKIP") + " servicemesh: no chartName in servicemesh/app.yaml (values files ignored)")
 		} else {
@@ -1367,6 +1378,9 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 						continue
 					}
 					ns, _ := values["namespace"].(string)
+					if ns == "" {
+						ns = smDefaultNS
+					}
 					if ns == "" {
 						ns = "default"
 					}
@@ -1402,7 +1416,7 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 		active["servicemesh-manifests"] = true
 		meta := map[string]interface{}{
 			"instanceName": "servicemesh-manifests",
-			"namespace":    "default",
+			"namespace":    smDefaultNS,
 			"project":      rootProject,
 			"stage":        stageName,
 			"hasSops":      smHasSecrets,

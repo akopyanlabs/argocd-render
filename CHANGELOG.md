@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.1
+
+### Fixed
+- servicemesh: namespace резолвился только из values-файла и жёстко падал в `default` — теперь цепочка `namespace` values-файла → `namespace` из `servicemesh/app.yaml` (категорный дефолт, новый ключ) → `default`. Применяется к helm release namespace (full-render) и `destination.namespace` всех servicemesh-Application, включая пакет `manifests/`
+
 ## v0.9.0
 
 ### Added
