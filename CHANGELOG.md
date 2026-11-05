@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.0
+
+### Added
+- `servicemesh/manifests/` — raw YAML одним пакетом: отдельный Application `<stage>-servicemesh-manifests` (syncWave 4, directory source на `projects/<stage>/servicemesh/manifests`; full-render раскладывает по `<kind>/`). SOPS-манифесты поддержаны (перешифровка в full-render, plugin `sops` в default, `--encrypt` по папке). Не требует chartName — работает без чарта вообще; syncPolicy из `servicemesh/app.yaml` применяется
+
+## v0.8.0
+
+### Added
+- Новая инфра-категория **`servicemesh/`**: Istio/mesh-ресурсы через произвольный чарт. `servicemesh/app.yaml` задаёт `chartName` (имя папки в `charts/`, как у приложений — стандартно istio-resources) и опциональную syncPolicy-кастомизацию. Каждый values-файл — отдельный релиз (Application `<stage>-servicemesh-<имя файла>`, syncWave 4, prune default true), namespace ресурсов из values `namespace` (default `default`). В обоих режимах. Нет `chartName`/чарта — категория пропускается с сообщением
+- `--init`: в скелет stage добавлены директории `servicemesh/` и `kyvernopolicy/`
+
 ## v0.7.0
 
 ### Changed

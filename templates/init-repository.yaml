@@ -18,6 +18,8 @@ stage:
     - rbac/sa
     - rbac/users
     - networkpolicy
+    - servicemesh
+    - kyvernopolicy
   stageYaml:
     server: https://kubernetes.default.svc
     repoUrl: https://git.example.com/org/repo.git

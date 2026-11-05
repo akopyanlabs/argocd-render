@@ -963,6 +963,143 @@ func renderInfraFullRender(stageDir, outputBase, stageName string, stageMeta map
 		}
 	}
 
+	// 6. ServiceMesh (syncWave: 4). Two independent parts:
+	//   - flat <svc>.yaml — helm values releases (chart via app.yaml chartName,
+	//     one Application per file);
+	//   - manifests/ — raw YAML applied as-is (one Application for the bundle,
+	//     SOPS-encrypted docs supported, no chart needed).
+	// The dir-level app.yaml carries syncPolicy overrides for all of them.
+	smDir := filepath.Join(stageDir, "servicemesh")
+	smConfig := loadInfraAppConfig(smDir)
+	smFiles := discoverInfraFiles(smDir)
+	smManifests := manifestYAMLFiles(smDir)
+	if len(smFiles) > 0 || len(smManifests) > 0 {
+		if smChart := func() string {
+			s, _ := loadYAML(yamlPath(filepath.Join(smDir, "app")))["chartName"].(string)
+			return s
+		}(); len(smFiles) > 0 && smChart == "" {
+			fmt.Println("  " + yellow("SKIP") + " servicemesh: no chartName in servicemesh/app.yaml (values files ignored)")
+		} else {
+			smChartDir := filepath.Join(chartsDir, smChart)
+			if _, err := os.Stat(filepath.Join(smChartDir, "Chart.yaml")); len(smFiles) > 0 && os.IsNotExist(err) {
+				fmt.Printf("  "+yellow("SKIP")+" servicemesh: chart not found: %s\n", smChart)
+			} else {
+				for _, f := range smFiles {
+					stem := fileStem(f)
+					values := loadYAML(f)
+					if len(values) == 0 {
+						continue
+					}
+					ns, _ := values["namespace"].(string)
+					if ns == "" {
+						ns = "default"
+					}
+					outDir := filepath.Join(outputBase, "servicemesh", stem)
+					os.RemoveAll(outDir)
+					if _, err := helmTemplateToDir(smChartDir, stem, ns, values, outDir); err != nil {
+						fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render servicemesh %s: %v\n", stem, err)
+						continue
+					}
+					appName := stageName + "-servicemesh-" + stem
+					active["servicemesh-"+stem] = true
+					app, _ := renderTemplate("application.yaml", map[string]string{
+						"name":      appName,
+						"sync_wave": "4",
+						"stage":     stageName,
+						"app_name":  "servicemesh-" + stem,
+						"project":   rootProject,
+						"repo_url":  hubRepoURL,
+						"branch":    branch,
+						"path":      "rendered/" + stageName + "/servicemesh/" + stem,
+						"server":    server,
+						"namespace": ns,
+					})
+					if app != nil {
+						applyAppSettings(app, smConfig, nil)
+						argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
+						writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+					}
+					fmt.Printf("  "+green("Rendered")+" infra: servicemesh/%s (chart %s, ns %s)\n", stem, smChart, ns)
+				}
+			}
+		}
+
+		// Raw manifests bundle (no chart involved)
+		if len(smManifests) > 0 {
+			outDir := filepath.Join(outputBase, "servicemesh", "manifests")
+			hasSOPS := hasEncryptedManifest(smManifests)
+			var saved map[string]encryptedEntry
+			if hasSOPS {
+				saved = saveEncryptedFiles(outDir, []string{"secret"})
+			}
+			os.RemoveAll(outDir)
+			var buf bytes.Buffer
+			for _, mf := range smManifests {
+				data, err := os.ReadFile(mf)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" read %s: %v\n", mf, err)
+					continue
+				}
+				content := string(data)
+				if isSOPSEncrypted(mf) {
+					plain, err := decryptContent(content)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" decrypt manifest %s: %v\n", mf, err)
+						continue
+					}
+					content = plain
+				}
+				buf.WriteString(content)
+				if !strings.HasSuffix(content, "\n") {
+					buf.WriteString("\n")
+				}
+				buf.WriteString("---\n")
+			}
+			if _, err := writeDocs(buf.Bytes(), outDir, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" render servicemesh manifests: %v\n", err)
+			} else {
+				if hasSOPS {
+					encryptSOPSSecrets(outDir, []string{"secret"}, saved)
+				}
+				appName := stageName + "-servicemesh-manifests"
+				active["servicemesh-manifests"] = true
+				app, _ := renderTemplate("application.yaml", map[string]string{
+					"name":      appName,
+					"sync_wave": "4",
+					"stage":     stageName,
+					"app_name":  "servicemesh-manifests",
+					"project":   rootProject,
+					"repo_url":  hubRepoURL,
+					"branch":    branch,
+					"path":      "rendered/" + stageName + "/servicemesh/manifests",
+					"server":    server,
+					"namespace": "default",
+				})
+				if app != nil && hasSOPS {
+					removeNestedKey(app, "spec", "source", "directory")
+					setNestedKey(app, map[string]interface{}{"name": "sops"}, "spec", "source", "plugin")
+				}
+				if app != nil {
+					applyAppSettings(app, smConfig, nil)
+					argocdAppsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
+					writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+				}
+				fmt.Printf("  "+green("Rendered")+" infra: servicemesh/manifests (%d files)\n", len(smManifests))
+			}
+		}
+
+		// Cleanup stale servicemesh output dirs
+		smOutPath := filepath.Join(outputBase, "servicemesh")
+		if entries, err := os.ReadDir(smOutPath); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && !active["servicemesh-"+e.Name()] {
+					os.RemoveAll(filepath.Join(smOutPath, e.Name()))
+					fmt.Printf("  "+yellow("Removed")+": servicemesh/%s\n", e.Name())
+				}
+			}
+		}
+	}
+
 	return active
 }
 
@@ -1204,6 +1341,89 @@ func renderInfraDefaultMode(stageDir, stageName string, stageMeta map[string]int
 			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
 		}
 		fmt.Printf("  "+green("Application")+": kyvernopolicy (helm, %d files)\n", len(kyFiles))
+	}
+
+	// 6. ServiceMesh (syncWave: 4). Flat <svc>.yaml — helm values Applications
+	// (chart via app.yaml chartName); manifests/ — one raw bundle Application
+	// (directory source, plugin sops when encrypted docs present).
+	smDir := filepath.Join(stageDir, "servicemesh")
+	smConfig := loadInfraAppConfig(smDir)
+	smFiles := discoverInfraFiles(smDir)
+	smManifests := manifestYAMLFiles(smDir)
+	smHasSecrets := hasEncryptedManifest(smManifests)
+	if len(smFiles) > 0 {
+		smChart, _ := loadYAML(yamlPath(filepath.Join(smDir, "app")))["chartName"].(string)
+		if smChart == "" {
+			fmt.Println("  " + yellow("SKIP") + " servicemesh: no chartName in servicemesh/app.yaml (values files ignored)")
+		} else {
+			smChartDirAbs := filepath.Join(chartsDir, smChart)
+			if _, err := os.Stat(filepath.Join(smChartDirAbs, "Chart.yaml")); os.IsNotExist(err) {
+				fmt.Printf("  "+yellow("SKIP")+" servicemesh: chart not found: %s\n", smChart)
+			} else {
+				for _, f := range smFiles {
+					stem := fileStem(f)
+					values := loadYAML(f)
+					if len(values) == 0 {
+						continue
+					}
+					ns, _ := values["namespace"].(string)
+					if ns == "" {
+						ns = "default"
+					}
+					appName := stageName + "-servicemesh-" + stem
+					active["servicemesh-"+stem] = true
+					app, _ := renderTemplate("application-helm.yaml", map[string]string{
+						"name":         appName,
+						"sync_wave":    "4",
+						"stage":        stageName,
+						"app_name":     "servicemesh-" + stem,
+						"project":      rootProject,
+						"repo_url":     hubRepoURL,
+						"branch":       branch,
+						"chart_path":   "charts/" + smChart,
+						"chart_values": chartValuesFile(smChartDirAbs),
+						"values_path":  yamlChartRelPath(smChartDirAbs, f),
+						"release_name": stem,
+						"server":       server,
+						"namespace":    ns,
+					})
+					if app != nil {
+						applyAppSettings(app, smConfig, nil)
+						writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+					}
+					fmt.Printf("  "+green("Application")+": servicemesh/%s (helm, chart %s, ns %s)\n", stem, smChart, ns)
+				}
+			}
+		}
+	}
+
+	if len(smManifests) > 0 {
+		appName := stageName + "-servicemesh-manifests"
+		active["servicemesh-manifests"] = true
+		meta := map[string]interface{}{
+			"instanceName": "servicemesh-manifests",
+			"namespace":    "default",
+			"project":      rootProject,
+			"stage":        stageName,
+			"hasSops":      smHasSecrets,
+			"syncWave":     "4",
+			"application":  smConfig["application"],
+		}
+		path := "projects/" + stageName + "/servicemesh/manifests"
+		var app map[string]interface{}
+		if smHasSecrets {
+			app = generateSOPSApplication(meta, stageMeta, repoURL, branch, path)
+		} else {
+			app = generateAppApplication(meta, stageMeta, repoURL, branch, path)
+		}
+		if app != nil {
+			writeYAML(filepath.Join(argocdAppsDir, appName+".yaml"), app)
+		}
+		mode := "raw"
+		if smHasSecrets {
+			mode = "sops"
+		}
+		fmt.Printf("  "+green("Application")+": servicemesh/manifests (%s, %d files)\n", mode, len(smManifests))
 	}
 
 	return active
