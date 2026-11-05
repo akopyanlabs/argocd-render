@@ -284,7 +284,11 @@ argocd-render --help
 │       ├── namespaces/
 │       ├── rbac/
 │       ├── networkpolicy/
-│       └── kyvernopolicy/                  # Kyverno-политики (values для чарта)
+│       ├── kyvernopolicy/                  # Kyverno-политики (values для чарта)
+│       └── servicemesh/                    # Istio/mesh-ресурсы: values чарта из app.yaml chartName
+│           ├── app.yaml                    # chartName: istio-resources (+ syncPolicy-кастомизация)
+│           ├── <svc>.yaml
+│           └── manifests/                  # raw YAML одним пакетом (в т.ч. SOPS)
 ├── charts/
 │   ├── universal-helm-chart/                # Helm-чарт приложения
 │   │   ├── Chart.yaml
@@ -485,6 +489,7 @@ application:
 | rbac | `true` | аккумулируется из всех файлов, синхронизация должна сходиться |
 | networkpolicy | `true` | устаревшие политики должны удаляться |
 | kyvernopolicy | `true` | устаревшие политики должны удаляться |
+| servicemesh | `true` | устаревшие mesh-ресурсы должны удаляться |
 | repo bootstrap | `false` | хардкод, не должен пруниться |
 
 Остальные дефолты:
@@ -727,6 +732,39 @@ Best practices (GitOps policy-as-code с ArgoCD + Kyverno):
 - Аннотации `policies.kyverno.io/*` (`title`, `category`, `severity`, `description`) попадают в PolicyReport и `kubectl describe` — заполняйте их, политики перестают быть «безликими».
 - Если сам Kyverno деплоится через argocd-render — задайте ему syncWave ниже 3 (через `app.yaml`), чтобы он установился раньше своих политик.
 - Готовый пример политики: `restrict-external-ips` (блокировка `Service.spec.externalIPs`, MITM-вектор CVE-2020-8554) — в `values.yaml` чарта. Секции values: `kyvernoClusterPolicies` (ClusterPolicy) и `kyvernoPolicies` (namespaced Policy).
+
+ServiceMesh (`projects/<stage>/servicemesh/*.yaml`) — Istio/mesh-ресурсы (Gateway, VirtualService, ServiceEntry, DestinationRule, AuthorizationPolicy, PeerAuthentication, RequestAuthentication, Sidecar) через произвольный чарт, указанный в `servicemesh/app.yaml` (`chartName` — имя папки в `charts/`, как у приложений; стандартно — [istio-resources](https://github.com/akopyanlabs/istio-resources)). **Каждый файл — отдельный релиз** (модель чарта: один release = mesh-конфиг одного сервиса), Application `<stage>-servicemesh-<имя файла>`, syncWave 4, prune default true:
+
+```yaml
+# projects/production/servicemesh/app.yaml
+chartName: istio-resources        # charts/istio-resources в gitops-репо (vendored)
+prune: false                      # опционально — как у остальных инфра app.yaml
+```
+
+```yaml
+# projects/production/servicemesh/git.yaml — values istio-resources
+namespace: production             # namespace ресурсов (default: "default")
+ingress:
+  name: git
+  hosts: [git.example.com]
+  gateways:
+    - type: external
+      gateway_selector: istio-ingress-gateway-external
+      ports:
+        - number: 443
+          name: https
+          protocol: HTTPS
+          tls: {mode: SIMPLE}
+  virtualservice:
+    health: {enabled: true}
+    http:
+      - route:
+          - destination: {host: gitea.production.svc.cluster.local, port: {number: 3000}}
+```
+
+Чарт вендорится в gitops-репо (`cp -r charts/istio-resources <gitops>/charts/`). Нет `chartName` или чарта нет — категория пропускается с сообщением (не ошибка). Полная справка по values — в README чарта.
+
+Папка `servicemesh/manifests/` — raw YAML одним пакетом, без чарта: Application `<stage>-servicemesh-manifests` (directory source на `projects/.../servicemesh/manifests`; full-render раскладывает по `<kind>/` в `rendered/...`). SOPS-шифрованные манифесты поддержаны (дешифровка/перешифровка в full-render, plugin `sops` в default), шифрование — `argocd-render --encrypt projects/<stage>/servicemesh/manifests/`. Независима от values-файлов и `chartName`; syncPolicy из `app.yaml` применяется и к ней.
 
 AppProject: поля AppProject (`sourceRepos`, `destinations`, `orphanedResources`, whitelist/blacklist и т.д.) через values чарта **не задаются** — AppProject генерирует `argocd-render` из `main.yaml` stage (см. [main.yaml](#main-yaml-stage)).
 
