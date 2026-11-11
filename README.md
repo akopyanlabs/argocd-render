@@ -200,6 +200,21 @@ tools/
     └── .sops.example.yaml   # пример .sops.yaml
 ```
 
+#### Версия и обновление CMP sidecar
+
+Скрипт генератора и его фичи (например, аппенд `manifests/` в гибридных приложениях — с v0.5.0) **запекаются в образ** при сборке: релизы тулзы sidecar не обновляют. Версия видна по флагу и в логах каждого рендера:
+
+```bash
+# сборка с версией из git
+docker build tools/cmp-sops/ --build-arg CMP_SOPS_VERSION=$(git describe --tags --always) -t argocd-sops-cmp:<ver>
+
+# какая версия деплоена в кластере
+kubectl exec -n <argocd-ns> <repo-server-pod> -c <cmp-sidecar> -- sops-generate.sh --version
+# либо баннер [sops-cmp] cmp-sops <ver> в логах repo-server при рендере
+```
+
+Обновление: пересобрать образ → запушить в registry → обновить тег образа sidecar'а в helm-values ArgoCD → рестарт repo-server. Симптом устаревшего образа: «фича работает локально, но не в кластере» — сверяйте версию первым делом.
+
 #### Приватные helm-зависимости в CMP sidecar
 
 ArgoCD v3 не прокидывает repository-credentials в CMP sidecar (нативно — только Git через `provideGitCreds`). Поэтому `helm dep build` в плагине падает на приватных helm-репозиториях. `tools/cmp-sops/helm-repo-sync` закрывает этот провал: читает Secret'ы с label `argocd.argoproj.io/secret-type=repository` (`type: helm`) через in-cluster Kubernetes API и пишет helm-совместимый `repositories.yaml`.
