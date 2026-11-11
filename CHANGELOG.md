@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.3
+
+### Fixed
+- CMP (`sops-generate.sh`): в гибридных приложениях (chartName + `manifests/` + `secrets.yaml`) raw-манифесты **склеивались с последним helm-документом** — вывод `helm secrets template` не заканчивается `---`, а сепаратор ставился только после каждого манифеста. Тело raw.yaml (например, `spec` VirtualService) приклеивалось к последнему документу чарта (франкенштейн: `kind: ConfigMap` c `spec:` внутри). Теперь `---` ставится **перед** каждым аппенденным манифестом
+
+### Added
+- CMP: версия скрипта — `sops-generate.sh --version` (stdout) и баннер `[sops-cmp] cmp-sops <ver>` в логах каждого generate. Версия запекается при сборке образа: `docker build --build-arg CMP_SOPS_VERSION=$(git describe --tags --always) tools/cmp-sops/` (без build-arg — `dev`). Позволяет понять, какая версия sidecar'а деплоена в кластере (частая причина «фичи не работают» — устаревший образ CMP)
+
 ## v0.9.1
 
 ### Fixed

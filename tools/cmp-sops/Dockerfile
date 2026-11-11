@@ -28,9 +28,14 @@ ENV HELM_PLUGINS=/opt/helm-plugins \
 RUN   /custom-tools/helm plugin install https://github.com/jkroepke/helm-secrets.git && \
   chmod -R a+rX /opt/helm-plugins
 
-FROM quay.io/argoproj/argocd:v3.5.0
+FROM quay.io/argoproj/argocd:v3.6.1
 COPY --from=download /custom-tools/ /usr/local/bin/
 COPY --from=download /opt/helm-plugins /opt/helm-plugins
+# Script/image version, surfaced by `sops-generate.sh --version` and in every
+# generate log line. Pass at build time, e.g.:
+#   docker build --build-arg CMP_SOPS_VERSION=$(git describe --tags --always) ...
+ARG CMP_SOPS_VERSION=dev
+ENV CMP_SOPS_VERSION=${CMP_SOPS_VERSION}
 # Re-declare ALL helm env vars in the final stage (ENV does not carry across
 # multi-stage builds). Without HELM_CONFIG_HOME helm looks for repositories.yaml
 # under the default ~/.config/helm and never finds the one helm-repo-sync writes,

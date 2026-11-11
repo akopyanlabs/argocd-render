@@ -3,6 +3,21 @@ set -e
 
 log() { echo "[sops-cmp] $*" >&2; }
 
+# CMP_SOPS_VERSION is baked into the image at build time
+# (docker build --build-arg CMP_SOPS_VERSION=$(git describe --tags --always)).
+# "dev" means the image was built without the build-arg.
+CMP_SOPS_VERSION="${CMP_SOPS_VERSION:-dev}"
+
+# --version | -v: print the script/image version and exit (stdout, no generate).
+case "${1:-}" in
+    --version|-v)
+        echo "cmp-sops ${CMP_SOPS_VERSION}"
+        exit 0
+        ;;
+esac
+
+log "cmp-sops ${CMP_SOPS_VERSION}"
+
 # dep_hint reads /tmp/dep.log (helm dep build stderr) and surfaces actionable
 # hints for the most common failures, instead of dumping helm's verbose output.
 # Each recognized pattern logs a targeted message with a concrete next step;
@@ -251,15 +266,18 @@ $1"
 
     # Hybrid apps (argocd-render layout): append raw manifests after the helm
     # output. SOPS-encrypted docs are decrypted, plain ones pass through.
+    # A "---" separator is emitted BEFORE each manifest: helm's output does not
+    # end with "---", so without it the first manifest would merge into the
+    # last helm document (frankenstein: ConfigMap body + VirtualService spec).
     if [ -f "app.yaml" ] && [ -d manifests ]; then
         log "appending raw manifests/"
         find manifests -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | sort | while IFS= read -r f; do
+            echo "---"
             if grep -q '^sops:' "$f" 2>/dev/null; then
                 sops -d --input-type yaml --output-type yaml "$f"
             else
                 cat "$f"
             fi
-            echo "---"
         done
     fi
 
