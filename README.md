@@ -398,6 +398,18 @@ chartName: universal-helm-chart
 namespace: production
 ```
 
+Несколько values-файлов (переопределения поверх базы):
+```
+projects/home-190/apps/argocd/
+├── app.yaml
+├── values.yaml          # база
+├── values-2.yaml        # переопределяет часть значений базы
+└── values-3.yaml        # переопределяет поверх values-2
+```
+Файлы `values-<имя>.yaml/.yml` мержатся поверх `values.yaml` **в алфавитном порядке имён**, затем `secrets.yaml` (SOPS), затем `--set`. Итоговый приоритет: `chart values.yaml` → `values.yaml` → `values-*.yaml` (a→z) → `secrets.yaml` → `--set`. Работает в обоих режимах (в default-режиме файлы дописываются в `source.helm.valueFiles`). `values-*` не шифруются — для секретов остаётся `secrets*` + `--encrypt`.
+
+В plugin-режиме (приложения с `secrets.yaml` → CMP sidecar) порядок тот же: CMP собирает `-f` цепочку `values.yaml → values-* (a→z) → secrets*` сам. Сортировка байтовая в обоих режимах (`values-10.yaml` раньше `values-2.yaml`) — при 10+ файлах нумеруйте `values-01`, `values-02`. В multi-env режиме (`VALUES_ENV`) файлы `values-*` env-скоупеды: берётся только `values-$ENV.yaml`.
+
 Приложение с SOPS-секретами:
 ```yaml
 chartName: universal-helm-chart
