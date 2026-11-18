@@ -141,7 +141,8 @@ if [ -f "app.yaml" ] || [ -f "Chart.yaml" ]; then
     #   values-<VALUES_ENV>.yaml|yml      (env override, optional)
     #   secrets-<VALUES_ENV>.yaml|yml     (env secrets, SOPS, optional)
     #   → only the matching env suffix is picked; other values-*/secrets-*
-    #     are ignored.
+    #     are ignored (values-<name>.yaml NOT matching the env is env-scoped
+    #     here — no cross-env mixing).
     #
     # VALUES_ENV unset (single-env):
     #   values.yaml | values.yml       (optional)
@@ -175,9 +176,22 @@ $1"
             log "WARNING: VALUES_ENV=$ARGOCD_ENV_VALUES_ENV but no values/secrets found for it"
         fi
     else
-        # single-env: base values + all secrets*
+        # single-env: base values + values-* overrides (filename order) + secrets*.
+        # The values-* glob mirrors argocd-render's full-render merge order:
+        # values.yaml → values-*.yaml (a→z) → secrets*.
         add_src "values.yaml" || add_src "values.yml"
         [ -n "$SOURCES" ] || log "WARNING: no values.yaml/values.yml found; rendering with secrets only (if any)"
+
+        EXTRAS=$(find . -maxdepth 1 -type f \
+                    \( -name 'values-*.yaml' -o -name 'values-*.yml' \) \
+                    | sed 's|^\./||' | sort || true)
+        OLDIFS=$IFS
+        IFS='
+'
+        for ex in $EXTRAS; do
+            add_src "$ex"
+        done
+        IFS=$OLDIFS
 
         SECRETS=$(find . -maxdepth 1 -type f \
                     \( -name 'secrets*.yaml' -o -name 'secrets*.yml' \) \

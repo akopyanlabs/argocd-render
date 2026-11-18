@@ -1718,6 +1718,37 @@ func manifestYAMLFiles(appDir string) []string {
 	return files
 }
 
+// appValuesFiles returns additional values override files of an app —
+// values-<name>.yaml/yml (NOT the base values.yaml, NOT secrets*), sorted by
+// filename. Merge order = sort order: chart values.yaml → values.yaml →
+// values-*.yaml → secrets.yaml → --set.
+func appValuesFiles(appDir string) []string {
+	entries, err := os.ReadDir(appDir)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "values-") {
+			continue
+		}
+		ext := filepath.Ext(name)
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		if strings.HasPrefix(name, "secrets") {
+			continue
+		}
+		files = append(files, filepath.Join(appDir, name))
+	}
+	sort.Strings(files)
+	return files
+}
+
 // hasEncryptedManifest reports whether any manifests/ file carries SOPS
 // encryption — such an app needs the SOPS encrypt/decrypt cycle even without
 // a helm secrets values file.
@@ -1794,6 +1825,10 @@ func renderApp(stageDir, appDir, outputBase, stageProject string, cliOverrides m
 	if chartName != "" {
 		envValues := yamlPath(filepath.Join(appDir, "values"))
 		values = mergeValues(chartDir, envValues)
+		// additional override files: values-*.yaml in filename order
+		for _, f := range appValuesFiles(appDir) {
+			values = deepMerge(values, loadYAML(f))
+		}
 		secretsFile := yamlPath(filepath.Join(appDir, "secrets"))
 		if _, err := os.Stat(secretsFile); err == nil {
 			hasSOPS = true
@@ -1939,6 +1974,36 @@ func generateAppApplication(appMeta map[string]interface{}, stageMeta map[string
 	return app
 }
 
+// appendAppValuesFiles adds the app's values-*.yaml override files to the
+// helm valueFiles of an Application (single source or first source of a
+// multi-source). Base values.yaml stays ${values_path}; overrides follow it
+// in filename order — the same merge order as full-render.
+func appendAppValuesFiles(app map[string]interface{}, stage, instanceName string) {
+	files := appValuesFiles(filepath.Join(repoRoot, "projects", stage, "apps", instanceName))
+	if len(files) == 0 {
+		return
+	}
+	spec, _ := app["spec"].(map[string]interface{})
+	if spec == nil {
+		return
+	}
+	var helm map[string]interface{}
+	if sources, ok := spec["sources"].([]interface{}); ok && len(sources) > 0 {
+		src, _ := sources[0].(map[string]interface{})
+		helm, _ = src["helm"].(map[string]interface{})
+	} else if source, ok := spec["source"].(map[string]interface{}); ok {
+		helm, _ = source["helm"].(map[string]interface{})
+	}
+	if helm == nil {
+		return
+	}
+	valueFiles, _ := helm["valueFiles"].([]interface{})
+	for _, f := range files {
+		valueFiles = append(valueFiles, "../../projects/"+stage+"/apps/"+instanceName+"/"+filepath.Base(f))
+	}
+	helm["valueFiles"] = valueFiles
+}
+
 func generateAppApplicationHelm(appMeta map[string]interface{}, stageMeta map[string]interface{}, repoURL, branch string) map[string]interface{} {
 	stage, _ := appMeta["stage"].(string)
 	instanceName, _ := appMeta["instanceName"].(string)
@@ -1978,6 +2043,7 @@ func generateAppApplicationHelm(appMeta map[string]interface{}, stageMeta map[st
 		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate helm application: %v\n", err)
 		return nil
 	}
+	appendAppValuesFiles(app, stage, instanceName)
 
 	if ignoreDiffs, ok := appMeta["ignoreDifferences"]; ok && ignoreDiffs != nil {
 		spec, _ := app["spec"].(map[string]interface{})
@@ -2034,6 +2100,7 @@ func generateMixedApplication(appMeta map[string]interface{}, stageMeta map[stri
 		fmt.Fprintf(os.Stderr, "  "+redErr("ERROR")+" generate mixed application: %v\n", err)
 		return nil
 	}
+	appendAppValuesFiles(app, stage, instanceName)
 
 	if ignoreDiffs, ok := appMeta["ignoreDifferences"]; ok && ignoreDiffs != nil {
 		spec, _ := app["spec"].(map[string]interface{})

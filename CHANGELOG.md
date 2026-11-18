@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.4
+
+### Added
+- Несколько values-файлов у приложения: `values-<имя>.yaml/.yml` рядом с базовым `values.yaml` мержатся поверх него в алфавитном порядке имён (приоритет: chart → values.yaml → values-*.yaml → secrets.yaml → --set). Оба режима: full-render мержит локально, default дописывает файлы в `source.helm.valueFiles` (включая multi-source/mixed — в первую source)
+- CMP (`sops-generate.sh`, single-env): `values-*.yaml` включены в `-f` цепочку в том же порядке (base → values-* a→z → secrets*) — plugin-рендер SOPS-приложений согласован с full-render. Multi-env (`VALUES_ENV`) без изменений: env-скоупинг, несовпадающие `values-*` игнорируются
+
 ## v0.9.3
 
 ### Fixed

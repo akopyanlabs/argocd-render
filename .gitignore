@@ -11,3 +11,4 @@ build/
 .zcode
 .claude
 AGENTS.md
+.tmp/
