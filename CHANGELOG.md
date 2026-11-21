@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.5
+
+### Fixed
+- **Удалённый stage оставлял сироты**: очистка артефактов несуществующих stage'ей работала только в full-render без `--stage` — в default-режиме Application'ы удалённого stage'а оставались в `rendered/argocd/applications/` (ArgoCD продолжал их синкать), при `--stage` не чистилось ничего. Теперь очистка (Applications + AppProject + `rendered/<stage>/`) выполняется при **любом** рендере: keep-set — актуальный список stage'ей из `projects/`, удаляются только сироты, живые stage'и не трогаются
+- **`--app` удалял соседей**: пер-stage очистка удаляла все Application/каталоги, не отрендеренные в этом запуске — `argocd-render --stage X --app forgejo` стирал Application'ы остальных приложений stage. Теперь keep-set при `--app` — все приложения, существующие в каталоге stage: соседей фильтр не трогает, удаляются только приложения, убранные из каталога
+
 ## v0.9.4
 
 ### Added

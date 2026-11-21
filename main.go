@@ -2372,7 +2372,9 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 		// Repos
 		activeRepos := renderRepos(stageName, stageMeta, repoEntries, argocdAppsDir, branch)
 
-		// Cleanup stale rendered app dirs
+		// Cleanup stale rendered app dirs (--app must not delete siblings
+		// that still exist in the stage)
+		keepUnselectedApps(activeApps, stageDir, appFilter)
 		renderedAppsPath := filepath.Join(outputBase, renderedAppsDir)
 		if entries, err := os.ReadDir(renderedAppsPath); err == nil {
 			for _, e := range entries {
@@ -2489,7 +2491,9 @@ func renderStage(stageDir, appFilter string, fullRender bool, cliOverrides map[s
 			activeApps[name] = true
 		}
 
-		// Cleanup stale Application YAMLs
+		// Cleanup stale Application YAMLs (--app must not delete siblings
+		// that still exist in the stage)
+		keepUnselectedApps(activeApps, stageDir, appFilter)
 		cleanupStaleApps(argocdAppsDir, stageName, activeApps, activeRepos)
 	}
 
@@ -2516,6 +2520,19 @@ func renderRepos(stageName string, stageMeta map[string]interface{}, repoEntries
 		fmt.Printf("  External repo: %s\n", repoName)
 	}
 	return activeRepos
+}
+
+// keepUnselectedApps protects apps not selected by --app from per-stage
+// cleanup: a filtered render must not delete siblings that still exist in the
+// stage — they are simply not rendered in this run. Without an --app filter
+// this is a no-op and cleanup behaves as usual.
+func keepUnselectedApps(activeApps map[string]bool, stageDir, appFilter string) {
+	if appFilter == "" {
+		return
+	}
+	for _, ad := range discoverApps(stageDir, "") {
+		activeApps[filepath.Base(ad)] = true
+	}
 }
 
 func cleanupStaleApps(argocdAppsDir, stageName string, activeApps, activeRepos map[string]bool) {
@@ -2990,70 +3007,79 @@ func main() {
 	}
 
 	fmt.Printf("\nPhase 2: Rendering %d stage(s)\n", len(stages))
-	activeStageNames := make(map[string]bool)
 	for _, stageDir := range stages {
 		renderStage(stageDir, app, fullRender, cliOverrides)
+	}
+
+	// Cleanup artifacts of stages that no longer exist in projects/ — runs on
+	// every render, any mode, with or without --stage filter: the keep-set is
+	// derived from the repo itself, so a removed stage has only orphans left.
+	activeStageNames := make(map[string]bool)
+	for _, stageDir := range discoverStages("") {
 		activeStageNames[filepath.Base(stageDir)] = true
 	}
-
-	// Cleanup stages that no longer exist
-	if fullRender && stage == "" {
-		renderedDir := filepath.Join(repoRoot, "rendered")
-		appsDir := filepath.Join(repoRoot, "rendered", "argocd", "applications")
-		if entries, err := os.ReadDir(renderedDir); err == nil {
-			for _, e := range entries {
-				if !e.IsDir() || e.Name() == "argocd" {
-					continue
-				}
-				if !activeStageNames[e.Name()] {
-					os.RemoveAll(filepath.Join(renderedDir, e.Name()))
-					fmt.Printf("  "+yellow("Removed")+": rendered/%s/\n", e.Name())
-				}
-			}
-		}
-		if entries, err := os.ReadDir(appsDir); err == nil {
-			for _, e := range entries {
-				if !strings.HasSuffix(e.Name(), ".yaml") {
-					continue
-				}
-				matched := false
-				for s := range activeStageNames {
-					if strings.HasPrefix(e.Name(), s+"-") {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					os.Remove(filepath.Join(appsDir, e.Name()))
-					fmt.Printf("  "+yellow("Removed")+": applications/%s\n", e.Name())
-				}
-			}
-		}
-	}
-
-	// Cleanup stale AppProject files (rendered/argocd/projects/<stage>.yaml) when
-	// rendering all stages. Projects render per-stage into a shared directory, so a
-	// stage that lost its project trigger (or was removed) must have its file pruned.
-	// Runs in both default and full-render modes, only when no --stage filter is set.
-	if stage == "" {
-		projectsDir := filepath.Join(repoRoot, "rendered", "argocd", "projects")
-		if entries, err := os.ReadDir(projectsDir); err == nil {
-			// The root-project stage must never have a generated AppProject file.
-			rootProject := getCfgString("argocd", "root-project")
-			for _, e := range entries {
-				if !strings.HasSuffix(e.Name(), ".yaml") {
-					continue
-				}
-				stageName := strings.TrimSuffix(e.Name(), ".yaml")
-				if !activeStageNames[stageName] || (rootProject != "" && stageName == rootProject) {
-					os.Remove(filepath.Join(projectsDir, e.Name()))
-					fmt.Printf("  "+yellow("Removed")+": projects/%s\n", e.Name())
-				}
-			}
-		}
-	}
+	cleanupStaleStages(activeStageNames)
 
 	fmt.Println("\n" + green("Done."))
+}
+
+// cleanupStaleStages removes rendered artifacts of stages that no longer exist
+// in projects/: Application YAMLs (including <stage>-<repo>-bootstrap), the
+// AppProject file and the rendered/<stage>/ tree. Safe to run on every render:
+// the keep-set is the list of stage directories present in the repo, so only
+// true orphans are removed — a stage that still exists is never touched.
+func cleanupStaleStages(activeStages map[string]bool) {
+	renderedDir := filepath.Join(repoRoot, "rendered")
+
+	// 1. rendered/<stage>/ trees (skip the shared rendered/argocd/)
+	if entries, err := os.ReadDir(renderedDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || e.Name() == "argocd" {
+				continue
+			}
+			if !activeStages[e.Name()] {
+				os.RemoveAll(filepath.Join(renderedDir, e.Name()))
+				fmt.Printf("  "+yellow("Removed")+": rendered/%s/\n", e.Name())
+			}
+		}
+	}
+
+	// 2. Application YAMLs whose stage prefix is gone
+	appsDir := filepath.Join(renderedDir, "argocd", "applications")
+	if entries, err := os.ReadDir(appsDir); err == nil {
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			matched := false
+			for s := range activeStages {
+				if strings.HasPrefix(e.Name(), s+"-") {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				os.Remove(filepath.Join(appsDir, e.Name()))
+				fmt.Printf("  "+yellow("Removed")+": applications/%s\n", e.Name())
+			}
+		}
+	}
+
+	// 3. AppProject files of gone stages (the root-project stage never gets one)
+	projectsDir := filepath.Join(renderedDir, "argocd", "projects")
+	if entries, err := os.ReadDir(projectsDir); err == nil {
+		rootProject := getCfgString("argocd", "root-project")
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			stageName := strings.TrimSuffix(e.Name(), ".yaml")
+			if !activeStages[stageName] || (rootProject != "" && stageName == rootProject) {
+				os.Remove(filepath.Join(projectsDir, e.Name()))
+				fmt.Printf("  "+yellow("Removed")+": projects/%s\n", e.Name())
+			}
+		}
+	}
 }
 
 // multiString implements flag.Value for repeated --set flags

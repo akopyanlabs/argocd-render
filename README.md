@@ -108,6 +108,8 @@ argocd-render --stage production
 
 # Рендер конкретного приложения
 argocd-render --stage production --app grafana
+# остальные приложения stage не рендерятся, но их Application и rendered-каталоги
+# сохраняются; чистятся только приложения, удалённые из каталога stage
 
 # Полный рендер (raw YAML)
 argocd-render --full-render
@@ -252,6 +254,10 @@ docker build tools/cmp-sops/ -t argocd-sops-cmp:latest
 Credentials не покидают pod (`emptyDir`, uid 999, файл `0600`) и не логируются. Покрытие: HTTP/HTTPS helm-репо. OCI-registry и Git-сабчарты не покрываются (последние — через нативный `provideGitCreds`).
 
 Подробнее — в `tools/cmp-sops/helm-repo-sync/README.md`.
+
+### Очистка удалённых stage
+
+При **любом** рендере (default, full-render, с `--stage` или без) удаляются артефакты stage'ей, которых больше нет в `projects/`: Application YAML (включая `<stage>-<repo>-bootstrap`), файл `rendered/argocd/projects/<stage>.yaml` и каталог `rendered/<stage>/`. Keep-set берётся из самого репозитория — удаляются только настоящие сироты, живые stage'и не затрагиваются. После коммита удалений ArgoCD убирает соответствующие Application из кластера (каскад зависит от prune-настроек вашего app-of-apps).
 
 ### Очистка кэша и артефактов
 
